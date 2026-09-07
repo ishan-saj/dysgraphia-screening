@@ -1,8 +1,7 @@
 import torch
-from torch.utils.data import DataLoader
-from torch.optim import AdamW
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader, random_split
 
-from dataset import DysgraphiaDataset
 from model import DysgraphiaModel
 
 
@@ -10,60 +9,274 @@ from model import DysgraphiaModel
 # Configuration
 # ============================================================
 
-BATCH_SIZE = 3
-EPOCHS = 5
+FEATURE_FILE = "../data/metadata/resnet_features.pt"
+
+BATCH_SIZE = 32
+EPOCHS = 20
 LEARNING_RATE = 1e-4
+
+VALIDATION_SPLIT = 0.2
+RANDOM_SEED = 42
 
 DEVICE = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
 )
 
-print("Using device:", DEVICE)
+
+# ============================================================
+# Cached Feature Dataset
+# ============================================================
+
+class CachedFeatureDataset(Dataset):
+
+    def __init__(self, feature_file):
+
+        data = torch.load(
+            feature_file,
+            map_location="cpu"
+        )
+
+        self.image_features = data["image_features"].float()
+        self.opencv_features = data["opencv_features"].float()
+
+        self.sample_ids = data["sample_ids"]
+        self.image_paths = data["image_paths"]
+
+        print(
+            f"Loaded cached features: "
+            f"{len(self.image_features)} samples"
+        )
+
+        print(
+            f"Image features: "
+            f"{self.image_features.shape}"
+        )
+
+        print(
+            f"OpenCV features: "
+            f"{self.opencv_features.shape}"
+        )
+
+    def __len__(self):
+        return len(self.image_features)
+
+    def __getitem__(self, index):
+
+        return {
+            "image_features": self.image_features[index],
+            "opencv_features": self.opencv_features[index],
+            "sample_id": self.sample_ids[index],
+            "image_path": self.image_paths[index],
+        }
 
 
 # ============================================================
 # Load Dataset
 # ============================================================
 
-dataset = DysgraphiaDataset(
-    metadata_csv="../data/metadata/metadata_all.csv",
-    image_root="../data/raw/IAM/images",
+print(f"Using device: {DEVICE}")
+
+dataset = CachedFeatureDataset(FEATURE_FILE)
+
+print(f"\nTotal usable samples: {len(dataset)}")
+
+
+# ============================================================
+# Train / Validation Split
+# ============================================================
+
+validation_size = int(
+    len(dataset) * VALIDATION_SPLIT
 )
 
-print("\nTotal samples available:", len(dataset))
+training_size = len(dataset) - validation_size
 
+generator = torch.Generator().manual_seed(
+    RANDOM_SEED
+)
 
-# ============================================================
-# DataLoader
-# ============================================================
-
-dataloader = DataLoader(
+train_dataset, validation_dataset = random_split(
     dataset,
+    [training_size, validation_size],
+    generator=generator
+)
+
+
+# ============================================================
+# Calculate normalization statistics
+# ONLY from training data
+# ============================================================
+
+train_indices = train_dataset.indices
+
+train_opencv_features = dataset.opencv_features[
+    train_indices
+]
+
+feature_mean = train_opencv_features.mean(
+    dim=0
+)
+
+feature_std = train_opencv_features.std(
+    dim=0
+)
+
+# Prevent division by zero
+feature_std[feature_std < 1e-8] = 1.0
+
+
+print("\nOpenCV feature normalization:")
+print("-" * 50)
+
+feature_names = [
+    "skew",
+    "baseline_deviation",
+    "word_spacing_cv",
+    "character_height_cv",
+    "average_word_height",
+    "average_word_width",
+    "stroke_density",
+    "slant_angle",
+    "writing_area",
+]
+
+for i, name in enumerate(feature_names):
+
+    print(
+        f"{name:25s} "
+        f"mean={feature_mean[i]:.4f} "
+        f"std={feature_std[i]:.4f}"
+    )
+
+
+# ============================================================
+# Normalize OpenCV features
+# ============================================================
+
+dataset.opencv_features = (
+    dataset.opencv_features - feature_mean
+) / feature_std
+
+
+# ============================================================
+# DataLoaders
+# ============================================================
+
+train_loader = DataLoader(
+    train_dataset,
     batch_size=BATCH_SIZE,
     shuffle=True,
     num_workers=0,
 )
 
-print("Number of batches:", len(dataloader))
-
-
-# ============================================================
-# Create Model
-# ============================================================
-
-model = DysgraphiaModel(
-    pretrained=True,
-    freeze_backbone=False
+validation_loader = DataLoader(
+    validation_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=0,
 )
 
-model = model.to(DEVICE)
+
+print(f"\nTraining samples: {len(train_dataset)}")
+print(f"Validation samples: {len(validation_dataset)}")
+
+print(f"Training batches: {len(train_loader)}")
+print(f"Validation batches: {len(validation_loader)}")
+
+
+# ============================================================
+# Model
+# ============================================================
+
+print("\nCreating fusion model...")
+
+original_model = DysgraphiaModel(
+    pretrained=False,
+    freeze_backbone=True
+)
+
+
+# ============================================================
+# Cached Fusion Model
+# ============================================================
+
+class CachedFusionModel(nn.Module):
+
+    def __init__(self, original_model):
+
+        super().__init__()
+
+        self.opencv_encoder = (
+            original_model.opencv_encoder
+        )
+
+        self.attention = (
+            original_model.attention
+        )
+
+        self.projection_head = (
+            original_model.projection_head
+        )
+
+        self.opencv_reconstruction = (
+            original_model.opencv_reconstruction
+        )
+
+    def forward(
+        self,
+        image_features,
+        opencv_features
+    ):
+
+        encoded_opencv = self.opencv_encoder(
+            opencv_features
+        )
+
+        fused_features = torch.cat(
+            [
+                image_features,
+                encoded_opencv
+            ],
+            dim=1
+        )
+
+        embedding, attention_weights = (
+            self.attention(fused_features)
+        )
+
+        projection = self.projection_head(
+            embedding
+        )
+
+        reconstructed_opencv = (
+            self.opencv_reconstruction(
+                embedding
+            )
+        )
+
+        return {
+            "image_features": image_features,
+            "opencv_features": encoded_opencv,
+            "fused_features": fused_features,
+            "embedding": embedding,
+            "projection": projection,
+            "reconstructed_opencv":
+                reconstructed_opencv,
+            "attention_weights":
+                attention_weights,
+        }
+
+
+model = CachedFusionModel(
+    original_model
+).to(DEVICE)
 
 
 # ============================================================
 # Optimizer
 # ============================================================
 
-optimizer = AdamW(
+optimizer = torch.optim.AdamW(
     model.parameters(),
     lr=LEARNING_RATE,
     weight_decay=1e-4
@@ -71,98 +284,155 @@ optimizer = AdamW(
 
 
 # ============================================================
+# Loss
+# ============================================================
+
+reconstruction_loss = nn.MSELoss()
+
+
+# ============================================================
 # Training
 # ============================================================
 
-print("\nStarting training...\n")
+best_validation_loss = float("inf")
 
-model.train()
+print("\n")
+print("=" * 50)
+print("Starting training")
+print("=" * 50)
+
 
 for epoch in range(EPOCHS):
 
-    total_embedding_loss = 0.0
+    # --------------------------------------------------------
+    # Training
+    # --------------------------------------------------------
 
-    for batch_index, batch in enumerate(dataloader):
+    model.train()
 
-        # ----------------------------------------------------
-        # Move data to device
-        # ----------------------------------------------------
+    total_train_loss = 0.0
 
-        images = batch["image"].to(DEVICE)
+    for batch in train_loader:
+
+        image_features = batch[
+            "image_features"
+        ].to(DEVICE)
 
         opencv_features = batch[
             "opencv_features"
         ].to(DEVICE)
 
-        # ----------------------------------------------------
-        # Forward pass
-        # ----------------------------------------------------
+        optimizer.zero_grad()
 
         output = model(
-            images,
+            image_features,
             opencv_features
         )
 
-        embedding = output["embedding"]
-
-        # ----------------------------------------------------
-        # Temporary self-supervised loss
-        #
-        # This keeps the pipeline trainable without pretending
-        # that IAM has clinical dysgraphia labels.
-        # ----------------------------------------------------
-
-        loss = torch.mean(
-            torch.sum(
-                embedding ** 2,
-                dim=1
-            )
+        loss = reconstruction_loss(
+            output["reconstructed_opencv"],
+            opencv_features
         )
-
-        # ----------------------------------------------------
-        # Backpropagation
-        # ----------------------------------------------------
-
-        optimizer.zero_grad()
 
         loss.backward()
 
         optimizer.step()
 
-        total_embedding_loss += loss.item()
+        total_train_loss += loss.item()
 
-        # ----------------------------------------------------
-        # Display progress
-        # ----------------------------------------------------
 
-        print(
-            f"Epoch [{epoch + 1}/{EPOCHS}] "
-            f"Batch [{batch_index + 1}/{len(dataloader)}] "
-            f"Loss: {loss.item():.4f}"
-        )
-
-    # --------------------------------------------------------
-    # Epoch result
-    # --------------------------------------------------------
-
-    average_loss = (
-        total_embedding_loss / len(dataloader)
+    average_train_loss = (
+        total_train_loss /
+        len(train_loader)
     )
+
+
+    # --------------------------------------------------------
+    # Validation
+    # --------------------------------------------------------
+
+    model.eval()
+
+    total_validation_loss = 0.0
+
+    with torch.no_grad():
+
+        for batch in validation_loader:
+
+            image_features = batch[
+                "image_features"
+            ].to(DEVICE)
+
+            opencv_features = batch[
+                "opencv_features"
+            ].to(DEVICE)
+
+            output = model(
+                image_features,
+                opencv_features
+            )
+
+            loss = reconstruction_loss(
+                output["reconstructed_opencv"],
+                opencv_features
+            )
+
+            total_validation_loss += loss.item()
+
+
+    average_validation_loss = (
+        total_validation_loss /
+        len(validation_loader)
+    )
+
+
+    # --------------------------------------------------------
+    # Print
+    # --------------------------------------------------------
 
     print(
-        f"\nEpoch [{epoch + 1}/{EPOCHS}] "
-        f"Average Loss: {average_loss:.4f}\n"
+        f"Epoch [{epoch + 1}/{EPOCHS}] "
+        f"Train Loss: {average_train_loss:.6f} | "
+        f"Validation Loss: "
+        f"{average_validation_loss:.6f}"
     )
 
 
+    # --------------------------------------------------------
+    # Save best model
+    # --------------------------------------------------------
+
+    if average_validation_loss < best_validation_loss:
+
+        best_validation_loss = (
+            average_validation_loss
+        )
+
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "feature_mean": feature_mean,
+                "feature_std": feature_std,
+                "feature_names": feature_names,
+            },
+            "../best_dysgraphia_encoder.pth"
+        )
+
+        print(
+            "  -> Best model saved."
+        )
+
+
 # ============================================================
-# Save Model
+# Finished
 # ============================================================
 
-torch.save(
-    model.state_dict(),
-    "../dysgraphia_model.pth"
-)
-
+print("\n")
+print("=" * 50)
 print("Training completed.")
-print("Model saved to: ../dysgraphia_model.pth")
+print("=" * 50)
+
+print(
+    f"Best validation loss: "
+    f"{best_validation_loss:.6f}"
+)
