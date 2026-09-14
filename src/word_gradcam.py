@@ -841,119 +841,111 @@ def generate_gradcam(crop):
 
 
     # ========================================================
-    # REFINED THRESHOLD
+    # RESTRICT TO WORD / INK REGION
     # ========================================================
     #
-    # 35th percentile keeps considerably more of the
-    # continuous activation than the previous 70th
-    # percentile approach.
-    #
-    # This preserves:
-    #
-    # Blue -> Cyan -> Green -> Yellow -> Orange -> Red
+    # Rather than thresholding the CAM itself (which collapses
+    # the color range and produces a flat red blob), segment
+    # the actual handwriting ink from the crop and use that as
+    # a spatial mask. The CAM stays fully continuous inside
+    # this region, which is what preserves the
+    # Blue -> Green -> Yellow -> Red gradient.
     #
     # ========================================================
 
-    positive_values = cam[
-        cam > 0
-    ]
+    gray_crop = cv2.cvtColor(
+        crop,
+        cv2.COLOR_BGR2GRAY
+    )
 
 
-    if len(positive_values) > 0:
-
-        threshold = np.percentile(
-            positive_values,
-            35
-        )
-
-    else:
-
-        threshold = 0
+    _, ink_mask = cv2.threshold(
+        gray_crop,
+        0,
+        255,
+        cv2.THRESH_BINARY_INV
+        + cv2.THRESH_OTSU
+    )
 
 
-    activation_mask = (
-        cam >= threshold
-    ).astype(
-        np.uint8
-    ) * 255
+    # ------------------------------------------------------
+    # Dilate so the heatmap covers full stroke width and a
+    # small margin around each stroke, instead of only the
+    # exact ink pixels.
+    # ------------------------------------------------------
 
-
-    # ========================================================
-    # MORPHOLOGICAL CLEANING
-    # ========================================================
-
-    kernel = cv2.getStructuringElement(
+    dilate_kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,
-        (5, 5)
+        (9, 9)
     )
 
 
-    activation_mask = (
-        cv2.morphologyEx(
-            activation_mask,
-            cv2.MORPH_CLOSE,
-            kernel
-        )
+    ink_mask = cv2.dilate(
+        ink_mask,
+        dilate_kernel,
+        iterations=1
     )
 
 
-    activation_mask = (
-        cv2.morphologyEx(
-            activation_mask,
-            cv2.MORPH_OPEN,
-            kernel
+    # ------------------------------------------------------
+    # Fallback: if Otsu finds almost no ink (e.g. a very
+    # faint or blank crop), fall back to the full crop so we
+    # never return an empty mask.
+    # ------------------------------------------------------
+
+    if np.count_nonzero(ink_mask) < 10:
+
+        ink_mask = np.full(
+            crop.shape[:2],
+            255,
+            dtype=np.uint8
         )
+
+
+    ink_mask_float = (
+        ink_mask.astype(
+            np.float32
+        )
+        / 255.0
+    )
+
+
+    cam = cam * ink_mask_float
+
+
+    # ========================================================
+    # GAUSSIAN SMOOTHING
+    # ========================================================
+    #
+    # A wider blur than the initial smoothing pass, so the
+    # activation diffuses smoothly across and between nearby
+    # strokes rather than sitting in isolated hard-edged
+    # pixels.
+    #
+    # ========================================================
+
+    cam = cv2.GaussianBlur(
+        cam,
+        (0, 0),
+        sigmaX=4.0
     )
 
 
     # ========================================================
-    # REMOVE SMALL COMPONENTS
+    # RE-NORMALIZE WITHIN THE INK REGION
     # ========================================================
 
-    num_labels, labels, stats, _ = (
-        cv2.connectedComponentsWithStats(
-            activation_mask,
-            connectivity=8
+    if cam.max() > 0:
+
+        cam = cam / (
+            cam.max()
+            + 1e-8
         )
+
+
+    activation_mask = (
+        ink_mask
     )
-
-
-    cleaned_mask = np.zeros_like(
-        activation_mask
-    )
-
-
-    min_area = max(
-        10,
-        int(
-            crop.shape[0]
-            *
-            crop.shape[1]
-            *
-            0.001
-        )
-    )
-
-
-    for label in range(
-        1,
-        num_labels
-    ):
-
-        area = stats[
-            label,
-            cv2.CC_STAT_AREA
-        ]
-
-
-        if area >= min_area:
-
-            cleaned_mask[
-                labels == label
-            ] = 255
-
-
-    activation_mask = cleaned_mask
 
 
     return (
@@ -1372,7 +1364,14 @@ for rank, (_, row) in enumerate(
 
 
     # ========================================================
-    # CREATE CONTINUOUS HEATMAP
+    # CONTINUOUS HEATMAP OVER THE WORD/INK REGION
+    # ========================================================
+    #
+    # cam is continuous (0-1) across the ink region, so the
+    # JET colormap renders the full
+    # Blue -> Green -> Yellow -> Red gradient rather than a
+    # single flat color.
+    #
     # ========================================================
 
     heatmap_gray = (
@@ -1389,22 +1388,14 @@ for rank, (_, row) in enumerate(
 
 
     # ========================================================
-    # CONTINUOUS TRANSPARENT OVERLAY
+    # INTENSITY-PROPORTIONAL TRANSPARENT OVERLAY
     # ========================================================
     #
-    # IMPORTANT:
-    #
-    # Transparency depends on actual Grad-CAM
-    # intensity.
-    #
-    # Low activation:
-    #     weak / transparent
-    #
-    # Medium activation:
-    #     visible
-    #
-    # High activation:
-    #     strong
+    # Transparency follows the actual continuous CAM value at
+    # each pixel, so low activation fades toward the original
+    # image and high activation stands out strongly. This is
+    # what makes the overlay look smooth and spatially
+    # distributed rather than a solid block of color.
     #
     # ========================================================
 
@@ -1416,23 +1407,11 @@ for rank, (_, row) in enumerate(
     )
 
 
-    activation_strength = (
-        cam ** 0.75
-    )
-
-
-    activation_strength = (
-        activation_strength
-        * mask_float
-    )
-
-
     alpha = (
         0.15
         +
         0.65
-        *
-        activation_strength
+        * cam
     )
 
 
@@ -1454,10 +1433,6 @@ for rank, (_, row) in enumerate(
         np.newaxis
     ]
 
-
-    # ========================================================
-    # BLEND ORIGINAL + HEATMAP
-    # ========================================================
 
     crop_float = (
         crop.astype(
