@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from torchvision.models import resnet50
+
+from torchvision.models import (
+    resnet50,
+    ResNet50_Weights
+)
 
 
 # ============================================================
@@ -18,47 +22,33 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DATA_DIR = PROJECT_ROOT / "data"
 
-RAW_DIR = (
-    DATA_DIR
-    / "raw"
-    / "IAM"
-    / "images"
-)
+RAW_DIR = DATA_DIR / "raw" / "IAM" / "images"
 
-METADATA_DIR = (
-    DATA_DIR
-    / "metadata"
-)
+METADATA_DIR = DATA_DIR / "metadata"
 
-METADATA_ALL_FILE = (
-    METADATA_DIR
-    / "metadata_all.csv"
-)
+METADATA_ALL_FILE = METADATA_DIR / "metadata_all.csv"
 
 WORD_ANOMALY_FILE = (
-    METADATA_DIR
-    / "all_samples_word_anomaly.csv"
+    METADATA_DIR / "all_samples_word_anomaly.csv"
 )
 
 WORDS_METADATA_FILE = (
-    METADATA_DIR
-    / "words_metadata.csv"
+    METADATA_DIR / "words_metadata.csv"
 )
 
 CHECKPOINT_FILE = (
-    PROJECT_ROOT
-    / "best_dysgraphia_encoder.pth"
+    PROJECT_ROOT / "best_dysgraphia_encoder.pth"
 )
 
 
 # ============================================================
-# COMMAND LINE ARGUMENT
+# COMMAND LINE
 # ============================================================
 
 parser = argparse.ArgumentParser(
     description=(
-        "Generate word-level anomaly Grad-CAM "
-        "explainability for an IAM handwriting sample."
+        "Generate sample-specific word-level "
+        "Grad-CAM explainability."
     )
 )
 
@@ -67,21 +57,21 @@ parser.add_argument(
     "--sample",
     dest="sample_id",
     required=True,
-    help="Sample ID, e.g. a01-063 or p06-052"
+    help="Sample ID, e.g. a01-063 or j06-051"
 )
 
 args = parser.parse_args()
 
-SAMPLE_ID = args.sample_id
+SAMPLE_ID = str(args.sample_id).strip()
 
 
 # ============================================================
-# OUTPUT DIRECTORY
+# SAMPLE-SPECIFIC OUTPUT DIRECTORY
 # ============================================================
 
 OUTPUT_DIR = (
-    METADATA_DIR
-    / f"{SAMPLE_ID}_word_explainability"
+    METADATA_DIR /
+    f"{SAMPLE_ID}_word_explainability"
 )
 
 OUTPUT_DIR.mkdir(
@@ -102,87 +92,72 @@ DEVICE = torch.device("cpu")
 # ============================================================
 
 print("=" * 70)
-print("WORD-LEVEL ANOMALY EXPLAINABILITY")
+print("WORD-LEVEL ANOMALY GRAD-CAM")
 print("=" * 70)
 
-print(
-    f"Sample: {SAMPLE_ID}"
-)
-
+print(f"Requested sample: {SAMPLE_ID}")
 print()
 
 
 # ============================================================
-# CHECK REQUIRED FILES
+# FILE CHECKS
 # ============================================================
 
-if not METADATA_ALL_FILE.exists():
+required_files = [
+    METADATA_ALL_FILE,
+    WORD_ANOMALY_FILE,
+    WORDS_METADATA_FILE
+]
 
-    raise FileNotFoundError(
-        "metadata_all.csv not found:\n"
-        f"{METADATA_ALL_FILE}"
-    )
+for file_path in required_files:
 
+    if not file_path.exists():
 
-if not WORD_ANOMALY_FILE.exists():
-
-    raise FileNotFoundError(
-        "Word anomaly file not found:\n"
-        f"{WORD_ANOMALY_FILE}"
-    )
-
-
-if not WORDS_METADATA_FILE.exists():
-
-    raise FileNotFoundError(
-        "words_metadata.csv not found:\n"
-        f"{WORDS_METADATA_FILE}"
-    )
+        raise FileNotFoundError(
+            f"Required file not found:\n{file_path}"
+        )
 
 
 # ============================================================
-# LOAD SAMPLE IMAGE PATH
-# FROM metadata_all.csv
+# LOAD SAMPLE METADATA
 # ============================================================
 
 metadata_df = pd.read_csv(
     METADATA_ALL_FILE
 )
 
-
-if "sample_id" not in metadata_df.columns:
-
-    raise ValueError(
-        "metadata_all.csv must contain "
-        "'sample_id'."
-    )
-
-
-if "image_path" not in metadata_df.columns:
-
-    raise ValueError(
-        "metadata_all.csv must contain "
-        "'image_path'."
-    )
-
-
-sample_rows = metadata_df[
+metadata_df["sample_id"] = (
     metadata_df["sample_id"]
     .astype(str)
-    == SAMPLE_ID
-]
+    .str.strip()
+)
+
+sample_rows = metadata_df[
+    metadata_df["sample_id"] == SAMPLE_ID
+].copy()
 
 
 if sample_rows.empty:
 
     raise ValueError(
-        f"No metadata found for sample "
-        f"'{SAMPLE_ID}'."
+        f"Sample '{SAMPLE_ID}' was not found "
+        f"in metadata_all.csv."
+    )
+
+
+sample_metadata = sample_rows.iloc[0]
+
+
+if "image_path" not in sample_metadata.index:
+
+    raise ValueError(
+        "metadata_all.csv does not contain "
+        "'image_path'."
     )
 
 
 metadata_image_path = str(
-    sample_rows.iloc[0]["image_path"]
+    sample_metadata["image_path"]
 ).strip()
 
 
@@ -191,33 +166,51 @@ IMAGE_PATH = Path(
 )
 
 
-# ------------------------------------------------------------
-# Convert relative metadata path to project path
-# ------------------------------------------------------------
-
 if not IMAGE_PATH.is_absolute():
 
     IMAGE_PATH = (
-        PROJECT_ROOT
-        / IMAGE_PATH
+        PROJECT_ROOT /
+        IMAGE_PATH
     )
 
 
 if not IMAGE_PATH.exists():
 
-    raise FileNotFoundError(
-        "Image specified by metadata "
-        "was not found:\n"
-        f"{IMAGE_PATH}\n\n"
-        f"Metadata path:\n"
-        f"{metadata_image_path}"
-    )
+    # Additional safe fallbacks.
+    candidates = [
+
+        PROJECT_ROOT /
+        metadata_image_path,
+
+        DATA_DIR /
+        metadata_image_path,
+
+        RAW_DIR /
+        Path(metadata_image_path).name
+    ]
+
+    found = None
+
+    for candidate in candidates:
+
+        if candidate.exists():
+
+            found = candidate
+            break
+
+    if found is None:
+
+        raise FileNotFoundError(
+            f"Image for sample '{SAMPLE_ID}' "
+            f"was not found.\n\n"
+            f"Metadata path:\n"
+            f"{metadata_image_path}"
+        )
+
+    IMAGE_PATH = found
 
 
-print(
-    f"Image: {IMAGE_PATH}"
-)
-
+print(f"Sample image: {IMAGE_PATH}")
 print()
 
 
@@ -225,40 +218,40 @@ print()
 # LOAD WORD ANOMALY DATA
 # ============================================================
 
-print(
-    "Loading word anomaly results..."
-)
+print("Loading word anomaly data...")
 
 
-all_word_anomalies = pd.read_csv(
+word_df = pd.read_csv(
     WORD_ANOMALY_FILE
 )
 
 
-if "form_id" not in all_word_anomalies.columns:
+if "form_id" not in word_df.columns:
 
     raise ValueError(
-        "all_samples_word_anomaly.csv "
-        "must contain 'form_id'."
+        "all_samples_word_anomaly.csv must "
+        "contain 'form_id'."
     )
 
 
-all_word_anomalies["form_id"] = (
-    all_word_anomalies["form_id"]
+word_df["form_id"] = (
+    word_df["form_id"]
     .astype(str)
+    .str.strip()
 )
 
 
-word_anomalies = all_word_anomalies[
-    all_word_anomalies["form_id"]
-    == SAMPLE_ID
+# IMPORTANT:
+# Only select the requested sample.
+sample_word_df = word_df[
+    word_df["form_id"] == SAMPLE_ID
 ].copy()
 
 
-if word_anomalies.empty:
+if sample_word_df.empty:
 
     raise ValueError(
-        f"No word anomaly records found "
+        f"No word anomaly records exist "
         f"for sample '{SAMPLE_ID}'."
     )
 
@@ -267,17 +260,12 @@ if word_anomalies.empty:
 # REMOVE PUNCTUATION
 # ============================================================
 
-punctuation_pattern = (
-    r"^[^\w]+$"
-)
+if "transcription" in sample_word_df.columns:
 
+    punctuation_pattern = r"^[^\w]+$"
 
-if "transcription" in word_anomalies.columns:
-
-    word_anomalies = word_anomalies[
-        ~word_anomalies[
-            "transcription"
-        ]
+    sample_word_df = sample_word_df[
+        ~sample_word_df["transcription"]
         .fillna("")
         .astype(str)
         .str.match(
@@ -287,11 +275,36 @@ if "transcription" in word_anomalies.columns:
 
 
 # ============================================================
-# SORT BY ANOMALY SCORE
+# VALID WORD SCORE CHECK
 # ============================================================
 
-word_anomalies = (
-    word_anomalies
+sample_word_df[
+    "word_anomaly_score"
+] = pd.to_numeric(
+    sample_word_df["word_anomaly_score"],
+    errors="coerce"
+)
+
+
+sample_word_df = sample_word_df.dropna(
+    subset=["word_anomaly_score"]
+)
+
+
+if sample_word_df.empty:
+
+    raise ValueError(
+        f"Sample '{SAMPLE_ID}' has no "
+        f"valid word anomaly scores."
+    )
+
+
+# ============================================================
+# SORT TOP WORDS
+# ============================================================
+
+sample_word_df = (
+    sample_word_df
     .sort_values(
         "word_anomaly_score",
         ascending=False
@@ -302,78 +315,26 @@ word_anomalies = (
 
 TOP_N = min(
     10,
-    len(word_anomalies)
+    len(sample_word_df)
 )
 
 
 top_words = (
-    word_anomalies
+    sample_word_df
     .head(TOP_N)
     .copy()
 )
 
 
 print(
-    f"Found {len(word_anomalies)} "
-    f"handwriting words."
+    f"Valid words for {SAMPLE_ID}: "
+    f"{len(sample_word_df)}"
 )
 
 print(
-    f"Selecting top {TOP_N} "
-    f"anomalous words."
+    f"Top anomalous words selected: "
+    f"{TOP_N}"
 )
-
-print()
-
-
-# ============================================================
-# PRINT TOP WORDS
-# ============================================================
-
-print(
-    "TOP ANOMALOUS WORDS"
-)
-
-print(
-    "-" * 70
-)
-
-
-for rank, (_, row) in enumerate(
-    top_words.iterrows(),
-    start=1
-):
-
-    word = str(
-        row["transcription"]
-    )
-
-    score = float(
-        row["word_anomaly_score"]
-    )
-
-    feature = str(
-        row.get(
-            "main_anomaly_feature",
-            "unknown"
-        )
-    )
-
-    z_score = float(
-        row.get(
-            "main_feature_z",
-            0
-        )
-    )
-
-    print(
-        f"#{rank:<2} "
-        f"{word:<20} "
-        f"score={score:.4f} "
-        f"feature={feature} "
-        f"z={z_score:.2f}"
-    )
-
 
 print()
 
@@ -387,44 +348,59 @@ words_metadata = pd.read_csv(
 )
 
 
-if "form_id" not in words_metadata.columns:
+required_word_columns = [
+    "form_id",
+    "word_id",
+    "bbox_x",
+    "bbox_y",
+    "bbox_width",
+    "bbox_height"
+]
 
-    raise ValueError(
-        "words_metadata.csv must contain "
-        "'form_id'."
-    )
 
+for column in required_word_columns:
 
-if "word_id" not in words_metadata.columns:
+    if column not in words_metadata.columns:
 
-    raise ValueError(
-        "words_metadata.csv must contain "
-        "'word_id'."
-    )
+        raise ValueError(
+            f"words_metadata.csv is missing "
+            f"'{column}'."
+        )
 
 
 words_metadata["form_id"] = (
     words_metadata["form_id"]
     .astype(str)
+    .str.strip()
 )
 
 
+words_metadata["word_id"] = (
+    words_metadata["word_id"]
+    .astype(str)
+    .str.strip()
+)
+
+
+# ============================================================
+# ONLY REQUESTED SAMPLE
+# ============================================================
+
 sample_boxes = words_metadata[
-    words_metadata["form_id"]
-    == SAMPLE_ID
+    words_metadata["form_id"] == SAMPLE_ID
 ].copy()
 
 
 if sample_boxes.empty:
 
     raise ValueError(
-        f"No IAM word metadata found "
+        f"No word bounding boxes found "
         f"for sample '{SAMPLE_ID}'."
     )
 
 
 # ============================================================
-# KEEP VALID IAM SEGMENTATION
+# KEEP VALID SEGMENTATION
 # ============================================================
 
 if "segmentation_status" in sample_boxes.columns:
@@ -452,81 +428,64 @@ image = cv2.imread(
 if image is None:
 
     raise ValueError(
-        f"Could not read image:\n"
-        f"{IMAGE_PATH}"
+        f"Could not read image:\n{IMAGE_PATH}"
     )
 
 
-image_height, image_width = (
-    image.shape[:2]
-)
+image_height, image_width = image.shape[:2]
 
 
 # ============================================================
-# LOAD RESNET50
+# LOAD IMAGE-NET PRETRAINED RESNET50
 # ============================================================
 
 print(
-    "Loading ResNet50..."
+    "Loading ImageNet-pretrained ResNet50..."
 )
 
 
-# IMPORTANT:
-#
-# Keep weights=None here to preserve the same
-# Grad-CAM visualization method used in your
-# original a01-063 implementation.
-#
-# The Grad-CAM is being used as a localization
-# visualization of the ResNet representation,
-# not as an ImageNet classification explanation.
-#
+weights = ResNet50_Weights.DEFAULT
 
 resnet = resnet50(
-    weights=None
+    weights=weights
 )
-
 
 resnet.fc = nn.Identity()
 
-
 resnet.eval()
 
-resnet.to(
-    DEVICE
-)
+resnet.to(DEVICE)
 
 
 # ============================================================
-# CHECKPOINT
+# CHECK PROJECT CHECKPOINT
 # ============================================================
 
-# The anomaly model checkpoint contains the fusion/
-# encoder layers used during cached-feature training.
-#
-# The Grad-CAM visualization below specifically hooks
-# the ResNet representation. Therefore the checkpoint
-# is not loaded into this standalone ResNet object.
-#
-# We only check that the project checkpoint exists,
-# so the project setup remains consistent.
-
-if not CHECKPOINT_FILE.exists():
+if CHECKPOINT_FILE.exists():
 
     print(
-        "WARNING: Model checkpoint not found:"
+        f"Project checkpoint found:\n"
+        f"{CHECKPOINT_FILE}"
+    )
+
+    print(
+        "Note: the checkpoint is not loaded "
+        "into ResNet because the trained pipeline "
+        "uses cached/frozen ResNet features."
+    )
+
+else:
+
+    print(
+        "WARNING: Project checkpoint not found:"
     )
 
     print(
         CHECKPOINT_FILE
     )
 
-    print(
-        "Continuing because this Grad-CAM "
-        "uses the standalone ResNet representation."
-    )
 
-    print()
+print()
 
 
 # ============================================================
@@ -580,16 +539,10 @@ backward_handle = (
 
 
 # ============================================================
-# PREPROCESS WORD CROP
+# PREPROCESS
 # ============================================================
 
 def preprocess_crop(crop):
-    """
-    Convert word crop to a 224x224 RGB tensor.
-
-    This intentionally follows the same preprocessing
-    used by the original working Grad-CAM version.
-    """
 
     resized = cv2.resize(
         crop,
@@ -597,20 +550,15 @@ def preprocess_crop(crop):
         interpolation=cv2.INTER_AREA
     )
 
-
     resized = cv2.cvtColor(
         resized,
         cv2.COLOR_BGR2RGB
     )
 
-
     resized = (
-        resized.astype(
-            np.float32
-        )
+        resized.astype(np.float32)
         / 255.0
     )
-
 
     tensor = torch.from_numpy(
         resized
@@ -620,88 +568,56 @@ def preprocess_crop(crop):
         1
     )
 
+    tensor = tensor.unsqueeze(0)
 
-    tensor = tensor.unsqueeze(
-        0
-    )
+    # ImageNet normalization.
+    mean = torch.tensor(
+        [0.485, 0.456, 0.406]
+    ).view(1, 3, 1, 1)
 
+    std = torch.tensor(
+        [0.229, 0.224, 0.225]
+    ).view(1, 3, 1, 1)
 
-    return tensor.to(
-        DEVICE
-    )
+    tensor = (
+        tensor - mean
+    ) / std
+
+    return tensor.to(DEVICE)
 
 
 # ============================================================
-# GENERATE REFINED GRAD-CAM
+# GENERATE GRAD-CAM
 # ============================================================
 
 def generate_gradcam(crop):
-    """
-    Generate refined continuous Grad-CAM.
-
-    Returns:
-
-        cam
-            Continuous Grad-CAM intensity
-            from 0 to 1.
-
-        activation_mask
-            Cleaned mask identifying
-            meaningful activation regions.
-    """
 
     global activations
-
     global gradients
 
-
     activations = None
-
     gradients = None
 
-
-    tensor = preprocess_crop(
-        crop
-    )
-
+    tensor = preprocess_crop(crop)
 
     tensor.requires_grad_(True)
-
 
     resnet.zero_grad(
         set_to_none=True
     )
 
-
     features = resnet(
         tensor
     )
 
-
-    # ========================================================
-    # ANOMALY REPRESENTATION TARGET
-    # ========================================================
-    #
-    # This is the same target used in the original
-    # working version.
-    #
-    # We use the L2 magnitude of the ResNet representation.
-    #
-    # ========================================================
-
+    # Representation magnitude target.
     target = torch.norm(
         features,
         p=2,
         dim=1
     ).sum()
 
-
     target.backward()
-
-
-    # ========================================================
-    # CHECK HOOKS
-    # ========================================================
 
     if (
         activations is None
@@ -710,13 +626,8 @@ def generate_gradcam(crop):
 
         raise RuntimeError(
             "Grad-CAM hooks did not capture "
-            "activations or gradients."
+            "activations/gradients."
         )
-
-
-    # ========================================================
-    # CONVERT TO NUMPY
-    # ========================================================
 
     activation_map = (
         activations[0]
@@ -725,7 +636,6 @@ def generate_gradcam(crop):
         .numpy()
     )
 
-
     gradient_map = (
         gradients[0]
         .detach()
@@ -733,26 +643,15 @@ def generate_gradcam(crop):
         .numpy()
     )
 
-
-    # ========================================================
-    # GRADIENT WEIGHTS
-    # ========================================================
-
     weights = np.mean(
         gradient_map,
         axis=(1, 2)
     )
 
-
-    # ========================================================
-    # WEIGHTED ACTIVATION
-    # ========================================================
-
     cam = np.zeros(
         activation_map.shape[1:],
         dtype=np.float32
     )
-
 
     for channel in range(
         activation_map.shape[0]
@@ -764,16 +663,10 @@ def generate_gradcam(crop):
             activation_map[channel]
         )
 
-
-    # ========================================================
-    # POSITIVE ACTIVATION ONLY
-    # ========================================================
-
     cam = np.maximum(
         cam,
         0
     )
-
 
     if cam.max() <= 0:
 
@@ -788,11 +681,6 @@ def generate_gradcam(crop):
             )
         )
 
-
-    # ========================================================
-    # NORMALIZE
-    # ========================================================
-
     cam = (
         cam - cam.min()
     ) / (
@@ -800,11 +688,6 @@ def generate_gradcam(crop):
         - cam.min()
         + 1e-8
     )
-
-
-    # ========================================================
-    # UPSAMPLE TO ORIGINAL CROP SIZE
-    # ========================================================
 
     cam = cv2.resize(
         cam,
@@ -815,21 +698,11 @@ def generate_gradcam(crop):
         interpolation=cv2.INTER_CUBIC
     )
 
-
-    # ========================================================
-    # SMOOTH
-    # ========================================================
-
     cam = cv2.GaussianBlur(
         cam,
         (0, 0),
         sigmaX=2.0
     )
-
-
-    # ========================================================
-    # NORMALIZE AGAIN
-    # ========================================================
 
     cam = (
         cam - cam.min()
@@ -839,61 +712,37 @@ def generate_gradcam(crop):
         + 1e-8
     )
 
-
     # ========================================================
-    # RESTRICT TO WORD / INK REGION
-    # ========================================================
-    #
-    # Rather than thresholding the CAM itself (which collapses
-    # the color range and produces a flat red blob), segment
-    # the actual handwriting ink from the crop and use that as
-    # a spatial mask. The CAM stays fully continuous inside
-    # this region, which is what preserves the
-    # Blue -> Green -> Yellow -> Red gradient.
-    #
+    # INK MASK
     # ========================================================
 
-    gray_crop = cv2.cvtColor(
+    gray = cv2.cvtColor(
         crop,
         cv2.COLOR_BGR2GRAY
     )
 
-
     _, ink_mask = cv2.threshold(
-        gray_crop,
+        gray,
         0,
         255,
         cv2.THRESH_BINARY_INV
         + cv2.THRESH_OTSU
     )
 
-
-    # ------------------------------------------------------
-    # Dilate so the heatmap covers full stroke width and a
-    # small margin around each stroke, instead of only the
-    # exact ink pixels.
-    # ------------------------------------------------------
-
-    dilate_kernel = cv2.getStructuringElement(
+    kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,
         (9, 9)
     )
 
-
     ink_mask = cv2.dilate(
         ink_mask,
-        dilate_kernel,
+        kernel,
         iterations=1
     )
 
-
-    # ------------------------------------------------------
-    # Fallback: if Otsu finds almost no ink (e.g. a very
-    # faint or blank crop), fall back to the full crop so we
-    # never return an empty mask.
-    # ------------------------------------------------------
-
-    if np.count_nonzero(ink_mask) < 10:
+    if np.count_nonzero(
+        ink_mask
+    ) < 10:
 
         ink_mask = np.full(
             crop.shape[:2],
@@ -901,39 +750,20 @@ def generate_gradcam(crop):
             dtype=np.uint8
         )
 
-
-    ink_mask_float = (
+    mask_float = (
         ink_mask.astype(
             np.float32
         )
         / 255.0
     )
 
-
-    cam = cam * ink_mask_float
-
-
-    # ========================================================
-    # GAUSSIAN SMOOTHING
-    # ========================================================
-    #
-    # A wider blur than the initial smoothing pass, so the
-    # activation diffuses smoothly across and between nearby
-    # strokes rather than sitting in isolated hard-edged
-    # pixels.
-    #
-    # ========================================================
+    cam = cam * mask_float
 
     cam = cv2.GaussianBlur(
         cam,
         (0, 0),
         sigmaX=4.0
     )
-
-
-    # ========================================================
-    # RE-NORMALIZE WITHIN THE INK REGION
-    # ========================================================
 
     if cam.max() > 0:
 
@@ -942,73 +772,45 @@ def generate_gradcam(crop):
             + 1e-8
         )
 
-
-    activation_mask = (
+    return (
+        cam,
         ink_mask
     )
 
 
-    return (
-        cam,
-        activation_mask
-    )
-
-
 # ============================================================
-# CREATE COLOR LEGEND
+# LEGEND
 # ============================================================
 
 def create_legend(width):
 
-    legend_height = 85
-
+    height = 85
 
     legend = np.full(
-        (
-            legend_height,
-            width,
-            3
-        ),
+        (height, width, 3),
         255,
         dtype=np.uint8
     )
 
-
-    # ========================================================
-    # CONTINUOUS COLOR GRADIENT
-    # ========================================================
-
-    gradient_values = np.linspace(
+    values = np.linspace(
         0,
         255,
         width
-    ).astype(
-        np.uint8
-    )
+    ).astype(np.uint8)
 
-
-    gradient_bar = cv2.applyColorMap(
-        gradient_values.reshape(
-            1,
-            -1
-        ),
+    gradient = cv2.applyColorMap(
+        values.reshape(1, -1),
         cv2.COLORMAP_JET
     )
-
 
     legend[
         8:32,
         :
     ] = np.repeat(
-        gradient_bar,
+        gradient,
         24,
         axis=0
     )
-
-
-    # ========================================================
-    # BORDER
-    # ========================================================
 
     cv2.rectangle(
         legend,
@@ -1017,11 +819,6 @@ def create_legend(width):
         (0, 0, 0),
         1
     )
-
-
-    # ========================================================
-    # LABELS
-    # ========================================================
 
     cv2.putText(
         legend,
@@ -1034,15 +831,11 @@ def create_legend(width):
         cv2.LINE_AA
     )
 
-
     cv2.putText(
         legend,
         "Moderate",
         (
-            max(
-                5,
-                width // 2 - 35
-            ),
+            max(5, width // 2 - 35),
             55
         ),
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -1051,16 +844,12 @@ def create_legend(width):
         1,
         cv2.LINE_AA
     )
-
 
     cv2.putText(
         legend,
         "High contribution",
         (
-            max(
-                5,
-                width - 120
-            ),
+            max(5, width - 120),
             55
         ),
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -1070,16 +859,11 @@ def create_legend(width):
         cv2.LINE_AA
     )
 
-
-    # ========================================================
-    # EXPLANATION
-    # ========================================================
-
     cv2.putText(
         legend,
         (
-            "Blue = lower model contribution | "
-            "Red = highest model contribution"
+            "Blue = lower | Red = highest "
+            "representation contribution"
         ),
         (5, 76),
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -1088,7 +872,6 @@ def create_legend(width):
         1,
         cv2.LINE_AA
     )
-
 
     return legend
 
@@ -1100,72 +883,36 @@ def create_legend(width):
 FEATURE_EXPLANATIONS = {
 
     "aspect_ratio":
-        (
-            "The word has an unusual width-to-height "
-            "relationship compared with the IAM "
-            "reference words."
-        ),
+        "The word has an unusual width-to-height relationship compared with the IAM reference words.",
 
     "ink_aspect_ratio":
-        (
-            "The handwriting ink has an unusual "
-            "width-to-height relationship compared "
-            "with the reference distribution."
-        ),
+        "The handwriting ink has an unusual width-to-height relationship compared with the reference distribution.",
 
     "ink_density":
-        (
-            "The amount of foreground handwriting "
-            "ink inside the word region differs "
-            "substantially from the IAM reference "
-            "distribution."
-        ),
+        "The amount of foreground handwriting ink differs substantially from the IAM reference distribution.",
 
     "centroid_x_ratio":
-        (
-            "The horizontal center of the handwriting "
-            "ink is unusually shifted within the "
-            "word region."
-        ),
+        "The horizontal center of the handwriting ink is unusually shifted within the word region.",
 
     "centroid_y_ratio":
-        (
-            "The vertical center of the handwriting "
-            "ink is unusually shifted within the "
-            "word region."
-        ),
+        "The vertical center of the handwriting ink is unusually shifted within the word region.",
 
     "largest_component_ratio":
-        (
-            "A dominant connected handwriting component "
-            "has an unusual relative size."
-        ),
+        "A dominant connected handwriting component has an unusual relative size.",
 
     "horizontal_projection_std":
-        (
-            "The horizontal distribution of handwriting "
-            "ink is unusually variable compared with "
-            "the reference."
-        ),
+        "The horizontal distribution of handwriting ink is unusually variable compared with the reference.",
 
     "vertical_projection_std":
-        (
-            "The vertical distribution of handwriting "
-            "ink is unusually variable compared with "
-            "the reference."
-        ),
+        "The vertical distribution of handwriting ink is unusually variable compared with the reference.",
 
     "lower_ink_ratio":
-        (
-            "The amount of handwriting ink in the lower "
-            "portion of the word differs substantially "
-            "from the reference."
-        )
+        "The amount of handwriting ink in the lower portion of the word differs substantially from the reference."
 }
 
 
 # ============================================================
-# EXPLAIN WORD
+# EXPLANATION
 # ============================================================
 
 def explain_word(row):
@@ -1177,47 +924,43 @@ def explain_word(row):
         )
     )
 
+    try:
 
-    z_score = float(
-        row.get(
-            "main_feature_z",
-            0
+        z_score = float(
+            row.get(
+                "main_feature_z",
+                0
+            )
         )
-    )
 
+    except Exception:
+
+        z_score = 0.0
 
     score = float(
         row["word_anomaly_score"]
     )
 
-
     feature_explanation = (
         FEATURE_EXPLANATIONS.get(
             feature,
-            (
-                "The handwriting region contains "
-                "a feature that differs substantially "
-                "from the reference distribution."
-            )
+            "The handwriting region contains a feature that differs from the reference distribution."
         )
     )
 
-
     return (
-        f"The word has an anomaly score of "
+        f"The word has a word anomaly score of "
         f"{score:.2f}. "
         f"The primary contributing feature is "
         f"{feature}, with a robust z-score of "
         f"{z_score:.2f}. "
         f"{feature_explanation} "
-        f"The Grad-CAM highlights image regions "
-        f"that contribute most strongly to the "
-        f"ResNet image representation used during "
-        f"the anomaly analysis. "
-        f"These highlighted regions should be "
-        f"interpreted as model evidence for "
-        f"unusualness, not as a clinical diagnosis "
-        f"of dysgraphia."
+        f"The Grad-CAM highlights regions that "
+        f"contribute strongly to the ResNet50 "
+        f"handwriting representation. "
+        f"This visualization is model evidence of "
+        f"unusual representation patterns and is "
+        f"not a clinical diagnosis of dysgraphia."
     )
 
 
@@ -1227,9 +970,8 @@ def explain_word(row):
 
 report_rows = []
 
-
 print(
-    "Generating word-level explanations..."
+    "Generating Grad-CAM images..."
 )
 
 print()
@@ -1241,34 +983,35 @@ for rank, (_, row) in enumerate(
 ):
 
     word = str(
-        row["transcription"]
-    )
-
+        row.get(
+            "transcription",
+            ""
+        )
+    ).strip()
 
     word_id = str(
         row.get(
             "word_id",
             ""
         )
-    )
+    ).strip()
 
 
     # ========================================================
-    # FIND IAM BOUNDING BOX
+    # EXACT WORD-ID MATCH
     # ========================================================
 
     box_rows = sample_boxes[
         sample_boxes["word_id"]
-        .astype(str)
         == word_id
-    ]
+    ].copy()
 
 
     if box_rows.empty:
 
         print(
-            f"WARNING: Bounding box not found "
-            f"for {word_id}. Skipping."
+            f"WARNING: No bounding box for "
+            f"{word_id} ({word})."
         )
 
         continue
@@ -1277,53 +1020,69 @@ for rank, (_, row) in enumerate(
     box = box_rows.iloc[0]
 
 
-    x = int(
-        box["bbox_x"]
-    )
+    try:
 
-    y = int(
-        box["bbox_y"]
-    )
+        x = int(
+            float(box["bbox_x"])
+        )
 
-    w = int(
-        box["bbox_width"]
-    )
+        y = int(
+            float(box["bbox_y"])
+        )
 
-    h = int(
-        box["bbox_height"]
-    )
+        w = int(
+            float(box["bbox_width"])
+        )
+
+        h = int(
+            float(box["bbox_height"])
+        )
+
+    except Exception:
+
+        print(
+            f"WARNING: Invalid bounding box "
+            f"for {word_id}."
+        )
+
+        continue
+
+
+    if w <= 0 or h <= 0:
+
+        print(
+            f"WARNING: Invalid dimensions "
+            f"for {word_id}."
+        )
+
+        continue
 
 
     # ========================================================
-    # PADDING
+    # SAFE CROP
     # ========================================================
 
     padding = 10
-
 
     x1 = max(
         0,
         x - padding
     )
 
-
     y1 = max(
         0,
         y - padding
     )
-
 
     x2 = min(
         image_width,
         x + w + padding
     )
 
-
     y2 = min(
         image_height,
         y + h + padding
     )
-
 
     crop = image[
         y1:y2,
@@ -1335,14 +1094,14 @@ for rank, (_, row) in enumerate(
 
         print(
             f"WARNING: Empty crop for "
-            f"{word}. Skipping."
+            f"{word_id}."
         )
 
         continue
 
 
     # ========================================================
-    # GENERATE GRAD-CAM
+    # GRAD-CAM
     # ========================================================
 
     try:
@@ -1357,21 +1116,14 @@ for rank, (_, row) in enumerate(
 
         print(
             f"WARNING: Grad-CAM failed "
-            f"for {word}: {error}"
+            f"for {word_id}: {error}"
         )
 
         continue
 
 
     # ========================================================
-    # CONTINUOUS HEATMAP OVER THE WORD/INK REGION
-    # ========================================================
-    #
-    # cam is continuous (0-1) across the ink region, so the
-    # JET colormap renders the full
-    # Blue -> Green -> Yellow -> Red gradient rather than a
-    # single flat color.
-    #
+    # HEATMAP
     # ========================================================
 
     heatmap_gray = (
@@ -1380,7 +1132,6 @@ for rank, (_, row) in enumerate(
         np.uint8
     )
 
-
     heatmap = cv2.applyColorMap(
         heatmap_gray,
         cv2.COLORMAP_JET
@@ -1388,15 +1139,7 @@ for rank, (_, row) in enumerate(
 
 
     # ========================================================
-    # INTENSITY-PROPORTIONAL TRANSPARENT OVERLAY
-    # ========================================================
-    #
-    # Transparency follows the actual continuous CAM value at
-    # each pixel, so low activation fades toward the original
-    # image and high activation stands out strongly. This is
-    # what makes the overlay look smooth and spatially
-    # distributed rather than a solid block of color.
-    #
+    # TRANSPARENT OVERLAY
     # ========================================================
 
     mask_float = (
@@ -1406,20 +1149,16 @@ for rank, (_, row) in enumerate(
         / 255.0
     )
 
-
     alpha = (
         0.15
         +
-        0.65
-        * cam
+        0.65 * cam
     )
-
 
     alpha = (
         alpha
         * mask_float
     )
-
 
     alpha = np.clip(
         alpha,
@@ -1427,12 +1166,10 @@ for rank, (_, row) in enumerate(
         0.80
     )
 
-
     alpha = alpha[
         ...,
         np.newaxis
     ]
-
 
     crop_float = (
         crop.astype(
@@ -1440,24 +1177,19 @@ for rank, (_, row) in enumerate(
         )
     )
 
-
     heatmap_float = (
         heatmap.astype(
             np.float32
         )
     )
 
-
     overlay = (
         crop_float
-        *
-        (1 - alpha)
+        * (1 - alpha)
         +
         heatmap_float
-        *
-        alpha
+        * alpha
     )
-
 
     overlay = np.clip(
         overlay,
@@ -1469,7 +1201,7 @@ for rank, (_, row) in enumerate(
 
 
     # ========================================================
-    # WHITE ACTIVATION CONTOURS
+    # CONTOURS
     # ========================================================
 
     contours, _ = cv2.findContours(
@@ -1477,7 +1209,6 @@ for rank, (_, row) in enumerate(
         cv2.RETR_EXTERNAL,
         cv2.CHAIN_APPROX_SIMPLE
     )
-
 
     cv2.drawContours(
         overlay,
@@ -1498,34 +1229,26 @@ for rank, (_, row) in enumerate(
         activation_mask.shape[1]
     )
 
-
-    high_activation_area = (
-        np.count_nonzero(
-            activation_mask
-        )
+    activation_area = np.count_nonzero(
+        activation_mask
     )
 
-
-    high_activation_percentage = (
-        high_activation_area
+    activation_percentage = (
+        activation_area
         /
-        max(
-            1,
-            total_area
-        )
+        max(1, total_area)
         *
         100
     )
 
 
     # ========================================================
-    # ADD LEGEND
+    # LEGEND
     # ========================================================
 
     legend = create_legend(
         overlay.shape[1]
     )
-
 
     overlay_with_legend = np.vstack(
         [
@@ -1545,6 +1268,10 @@ for rank, (_, row) in enumerate(
         word
     )
 
+    if not safe_word:
+
+        safe_word = "word"
+
 
     base_name = (
         f"{rank:02d}_"
@@ -1554,34 +1281,21 @@ for rank, (_, row) in enumerate(
 
 
     # ========================================================
-    # OUTPUT FILES
-    # ========================================================
-    #
-    # IMPORTANT:
-    #
-    # Files are stored directly inside
-    # SAMPLE_word_explainability
-    # to match your a01-063 structure.
-    #
+    # OUTPUT PATHS
     # ========================================================
 
     original_file = (
-        OUTPUT_DIR
-        /
+        OUTPUT_DIR /
         f"{base_name}_original.png"
     )
 
-
     gradcam_file = (
-        OUTPUT_DIR
-        /
+        OUTPUT_DIR /
         f"{base_name}_gradcam.png"
     )
 
-
     comparison_file = (
-        OUTPUT_DIR
-        /
+        OUTPUT_DIR /
         f"{base_name}_comparison.png"
     )
 
@@ -1607,71 +1321,62 @@ for rank, (_, row) in enumerate(
 
 
     # ========================================================
-    # SIDE-BY-SIDE COMPARISON
+    # COMPARISON
     # ========================================================
 
-    original_display = (
-        crop.copy()
-    )
-
+    original_display = crop.copy()
 
     gradcam_display = (
         overlay_with_legend.copy()
     )
 
-
     target_height = (
         gradcam_display.shape[0]
     )
 
-
-    # Resize original to same total height
     original_display = cv2.resize(
         original_display,
         (
-            int(
-                original_display.shape[1]
-                *
-                target_height
-                /
-                original_display.shape[0]
+            max(
+                1,
+                int(
+                    original_display.shape[1]
+                    *
+                    target_height
+                    /
+                    max(
+                        1,
+                        original_display.shape[0]
+                    )
+                )
             ),
             target_height
         ),
         interpolation=cv2.INTER_AREA
     )
 
-
-    comparison = np.hstack(
+    comparison_body = np.hstack(
         [
             original_display,
             gradcam_display
         ]
     )
 
-
-    # ========================================================
-    # TITLES
-    # ========================================================
-
     title_height = 45
-
 
     title = np.full(
         (
             title_height,
-            comparison.shape[1],
+            comparison_body.shape[1],
             3
         ),
         255,
         dtype=np.uint8
     )
 
-
     midpoint = (
         original_display.shape[1]
     )
-
 
     cv2.putText(
         title,
@@ -1683,7 +1388,6 @@ for rank, (_, row) in enumerate(
         2,
         cv2.LINE_AA
     )
-
 
     cv2.putText(
         title,
@@ -1699,18 +1403,12 @@ for rank, (_, row) in enumerate(
         cv2.LINE_AA
     )
 
-
     comparison = np.vstack(
         [
             title,
-            comparison
+            comparison_body
         ]
     )
-
-
-    # ========================================================
-    # SAVE COMPARISON
-    # ========================================================
 
     cv2.imwrite(
         str(comparison_file),
@@ -1728,7 +1426,7 @@ for rank, (_, row) in enumerate(
 
 
     # ========================================================
-    # ADD REPORT ROW
+    # SAVE REPORT ROW
     # ========================================================
 
     report_rows.append({
@@ -1780,7 +1478,7 @@ for rank, (_, row) in enumerate(
 
         "high_activation_percentage":
             float(
-                high_activation_percentage
+                activation_percentage
             ),
 
         "original_crop":
@@ -1809,39 +1507,32 @@ for rank, (_, row) in enumerate(
     })
 
 
-    # ========================================================
-    # TERMINAL OUTPUT
-    # ========================================================
-
     print(
         f"#{rank:<2} "
         f"{word:<20} "
         f"score="
-        f"{row['word_anomaly_score']:.4f} "
+        f"{float(row['word_anomaly_score']):.4f} "
         f"feature="
         f"{row.get('main_anomaly_feature', '')} "
         f"z="
         f"{float(row.get('main_feature_z', 0)):.2f} "
         f"activation="
-        f"{high_activation_percentage:.1f}%"
+        f"{activation_percentage:.1f}%"
     )
 
 
 # ============================================================
-# SAVE WORD EXPLAINABILITY CSV
+# SAVE CSV
 # ============================================================
 
 report = pd.DataFrame(
     report_rows
 )
 
-
 REPORT_FILE = (
-    OUTPUT_DIR
-    /
+    OUTPUT_DIR /
     "word_explainability_report.csv"
 )
-
 
 report.to_csv(
     REPORT_FILE,
@@ -1850,36 +1541,30 @@ report.to_csv(
 
 
 # ============================================================
-# CREATE OVERVIEW IMAGE
+# CREATE OVERVIEW
 # ============================================================
+
+overview_path = None
+
 
 if report_rows:
 
     overview_images = []
 
-
     for row in report_rows:
 
-        comparison_image_path = (
-            PROJECT_ROOT
-            /
+        comparison_path = (
+            PROJECT_ROOT /
             row["comparison_image"]
         )
 
-
         comparison_image = cv2.imread(
-            str(comparison_image_path)
+            str(comparison_path)
         )
-
 
         if comparison_image is None:
 
             continue
-
-
-        # ----------------------------------------------------
-        # Resize each comparison for overview
-        # ----------------------------------------------------
 
         comparison_image = cv2.resize(
             comparison_image,
@@ -1887,22 +1572,12 @@ if report_rows:
             interpolation=cv2.INTER_AREA
         )
 
-
-        # ----------------------------------------------------
-        # Label
-        # ----------------------------------------------------
-
         label = (
             f"#{row['rank']} "
-            f"{row['word']} "
-            f"| Score: "
+            f"{row['word']} | "
+            f"Score: "
             f"{row['word_anomaly_score']:.2f}"
         )
-
-
-        # ----------------------------------------------------
-        # Label background
-        # ----------------------------------------------------
 
         cv2.rectangle(
             comparison_image,
@@ -1912,10 +1587,9 @@ if report_rows:
             -1
         )
 
-
         cv2.putText(
             comparison_image,
-            label,
+            label[:65],
             (10, 24),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
@@ -1923,7 +1597,6 @@ if report_rows:
             2,
             cv2.LINE_AA
         )
-
 
         overview_images.append(
             comparison_image
@@ -1936,13 +1609,10 @@ if report_rows:
             overview_images
         )
 
-
         overview_path = (
-            OUTPUT_DIR
-            /
+            OUTPUT_DIR /
             "top_anomalous_words_overview.png"
         )
-
 
         cv2.imwrite(
             str(overview_path),
@@ -1950,21 +1620,8 @@ if report_rows:
         )
 
 
-    else:
-
-        overview_path = None
-
-
-else:
-
-    overview_path = None
-
-
-print()
-
-
 # ============================================================
-# CLEAN UP HOOKS
+# CLEANUP
 # ============================================================
 
 forward_handle.remove()
@@ -1973,8 +1630,10 @@ backward_handle.remove()
 
 
 # ============================================================
-# FINAL OUTPUT
+# FINAL
 # ============================================================
+
+print()
 
 print("=" * 70)
 print("WORD GRAD-CAM COMPLETE")
@@ -1982,92 +1641,42 @@ print("=" * 70)
 
 print()
 
-print(
-    f"Sample: {SAMPLE_ID}"
-)
+print(f"Sample: {SAMPLE_ID}")
 
 print(
-    f"Processed words: "
-    f"{len(report_rows)}"
+    f"Processed words: {len(report_rows)}"
 )
 
 print()
 
-print(
-    "Output directory:"
-)
-
-print(
-    OUTPUT_DIR
-)
+print("Output directory:")
+print(OUTPUT_DIR)
 
 print()
 
-print(
-    "CSV report:"
-)
-
-print(
-    REPORT_FILE
-)
+print("CSV report:")
+print(REPORT_FILE)
 
 if overview_path is not None:
 
     print()
 
-    print(
-        "Overview image:"
-    )
-
-    print(
-        overview_path
-    )
+    print("Overview image:")
+    print(overview_path)
 
 print()
 
-print(
-    "Generated:"
-)
-
-print(
-    "  - Original word crops"
-)
-
-print(
-    "  - Continuous Grad-CAM images"
-)
-
-print(
-    "  - Blue -> Green -> Yellow -> Red heatmaps"
-)
-
-print(
-    "  - Actual Grad-CAM intensity transparency"
-)
-
-print(
-    "  - White activation contours"
-)
-
-print(
-    "  - Color legends"
-)
-
-print(
-    "  - Side-by-side comparisons"
-)
-
-print(
-    "  - Quantitative explanations"
-)
-
-print(
-    "  - Overview image"
-)
-
-print(
-    "  - CSV report"
-)
+print("Generated:")
+print("  - Sample-specific original word crops")
+print("  - Sample-specific Grad-CAM images")
+print("  - Continuous Blue -> Green -> Yellow -> Red heatmaps")
+print("  - Intensity-proportional overlays")
+print("  - White activation contours")
+print("  - Color legends")
+print("  - Side-by-side comparisons")
+print("  - Quantitative explanations")
+print("  - Top-word overview")
+print("  - Word explainability CSV")
 
 print()
 

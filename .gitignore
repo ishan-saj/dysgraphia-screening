@@ -199,3 +199,5 @@ __pycache__/
 
 # Generated analysis outputs
 data/metadata/
+data/synthetic_anomalies/
+data/synthetic_form_anomalies/
