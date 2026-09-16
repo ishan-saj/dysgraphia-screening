@@ -12,7 +12,7 @@ from model import DysgraphiaModel
 FEATURE_FILE = "../data/metadata/resnet_features.pt"
 
 BATCH_SIZE = 32
-EPOCHS = 20
+EPOCHS = 50
 LEARNING_RATE = 1e-4
 
 VALIDATION_SPLIT = 0.2
