@@ -238,6 +238,30 @@ print(
 
 
 # ============================================================
+# CREATE CLEAN FORM → INDEX MAP
+# ============================================================
+#
+# NEW:
+# This lets us record exactly which clean embedding
+# each synthetic sample came from.
+#
+# Example:
+#
+# source_form = "a05-094"
+# source_index = 123
+#
+# means synthetic sample was generated from
+# clean_embeddings[123].
+#
+# ============================================================
+
+clean_index_by_id = {
+    sample_ids[i]: i
+    for i in range(len(sample_ids))
+}
+
+
+# ============================================================
 # LOAD CHECKPOINT
 # ============================================================
 
@@ -349,6 +373,14 @@ synthetic_types = []
 
 source_forms = []
 
+# ============================================================
+# NEW:
+# Exact index of the clean embedding corresponding
+# to each synthetic sample.
+# ============================================================
+
+source_indices = []
+
 
 # ============================================================
 # PROCESS SYNTHETIC IMAGES
@@ -373,6 +405,13 @@ for index, row in synthetic.iterrows():
         )
 
         continue
+
+    # --------------------------------------------------------
+    # NEW:
+    # Find exact clean embedding index
+    # --------------------------------------------------------
+
+    source_index = clean_index_by_id[source_form]
 
     image_path = (
         PROJECT_ROOT
@@ -442,6 +481,15 @@ for index, row in synthetic.iterrows():
         source_form
     )
 
+    # --------------------------------------------------------
+    # NEW:
+    # Save the exact clean embedding index.
+    # --------------------------------------------------------
+
+    source_indices.append(
+        source_index
+    )
+
     if (index + 1) % 100 == 0:
 
         print(
@@ -450,7 +498,7 @@ for index, row in synthetic.iterrows():
 
 
 # ============================================================
-# SAVE
+# CONVERT TO NUMPY
 # ============================================================
 
 synthetic_embeddings = np.array(
@@ -465,6 +513,15 @@ source_forms = np.array(
     source_forms
 )
 
+source_indices = np.array(
+    source_indices,
+    dtype=np.int64
+)
+
+
+# ============================================================
+# SAVE
+# ============================================================
 
 np.savez(
     OUTPUT_FILE,
@@ -475,7 +532,10 @@ np.savez(
 
     synthetic_types=synthetic_types,
 
-    source_forms=source_forms
+    source_forms=source_forms,
+
+    # NEW
+    source_indices=source_indices
 )
 
 
@@ -501,6 +561,16 @@ print(
 print(
     "Anomaly types:",
     len(synthetic_types)
+)
+
+print(
+    "Source indices:",
+    source_indices.shape
+)
+
+print(
+    "Unique source forms:",
+    len(np.unique(source_forms))
 )
 
 print("\nSaved to:")

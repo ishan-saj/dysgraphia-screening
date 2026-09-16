@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -29,59 +30,129 @@ OUTPUT_FILE = (
 
 
 # ============================================================
+# SETTINGS
+# ============================================================
+
+K = 1
+N_SPLITS = 5
+RANDOM_STATE = 42
+
+
+# ============================================================
 # LOAD EMBEDDINGS
 # ============================================================
 
-print("Loading embeddings...")
+print("Loading paired embeddings...")
 
 data = np.load(
     EMBEDDING_FILE,
     allow_pickle=True
 )
 
-clean_embeddings = data[
-    "clean_embeddings"
-]
+clean_embeddings = data["clean_embeddings"]
+synthetic_embeddings = data["synthetic_embeddings"]
+synthetic_types = data["synthetic_types"]
+source_forms = data["source_forms"]
+source_indices = data["source_indices"]
 
-synthetic_embeddings = data[
-    "synthetic_embeddings"
-]
-
-synthetic_types = data[
-    "synthetic_types"
-]
-
-synthetic_types = np.array(
-    [str(x) for x in synthetic_types]
-)
 
 print(
-    "Clean:",
+    "Clean embeddings:",
     clean_embeddings.shape
 )
 
 print(
-    "Synthetic:",
+    "Synthetic embeddings:",
     synthetic_embeddings.shape
+)
+
+print(
+    "Synthetic samples:",
+    len(synthetic_types)
+)
+
+print(
+    "Source indices:",
+    source_indices.shape
 )
 
 
 # ============================================================
-# SETTINGS
+# BASIC VALIDATION
 # ============================================================
 
-K = 1
+if len(synthetic_embeddings) != len(source_indices):
 
-N_SPLITS = 5
+    raise ValueError(
+        "Number of synthetic embeddings does not match "
+        "number of source indices."
+    )
 
-RANDOM_STATE = 42
+
+if len(synthetic_embeddings) != len(synthetic_types):
+
+    raise ValueError(
+        "Number of synthetic embeddings does not match "
+        "number of anomaly types."
+    )
+
+
+if np.any(source_indices < 0) or np.any(
+    source_indices >= len(clean_embeddings)
+):
+
+    raise ValueError(
+        "Some source indices are outside the clean embedding range."
+    )
 
 
 # ============================================================
-# OUT-OF-FOLD CLEAN SCORES
+# CHECK THAT SOURCE MAPPING IS VALID
 # ============================================================
 
-print("\nCalculating out-of-fold clean scores...")
+print("\nChecking source mapping...")
+
+for i in range(min(10, len(source_indices))):
+
+    clean_index = source_indices[i]
+
+    print(
+        f"Synthetic {i}: "
+        f"type={synthetic_types[i]} "
+        f"source_form={source_forms[i]} "
+        f"clean_index={clean_index}"
+    )
+
+
+# ============================================================
+# CROSS-VALIDATION
+# ============================================================
+#
+# IMPORTANT:
+#
+# Each synthetic sample is kept with the clean sample
+# it came from.
+#
+# For each fold:
+#
+# TRAIN CLEAN
+#      ↓
+# reference set for kNN
+#
+# VALIDATION CLEAN
+#      ↓
+# clean anomaly scores
+#
+# SYNTHETIC VERSIONS OF VALIDATION CLEAN
+#      ↓
+# synthetic anomaly scores
+#
+# This prevents the source clean sample from being
+# accidentally included in the reference set.
+#
+# ============================================================
+
+print("\nRunning paired 5-fold evaluation...")
 
 kf = KFold(
     n_splits=N_SPLITS,
@@ -89,155 +160,380 @@ kf = KFold(
     random_state=RANDOM_STATE
 )
 
+
+# ============================================================
+# STORAGE
+# ============================================================
+
 clean_scores = np.zeros(
-    len(clean_embeddings)
+    len(clean_embeddings),
+    dtype=np.float64
+)
+
+synthetic_scores = np.zeros(
+    len(synthetic_embeddings),
+    dtype=np.float64
+)
+
+clean_evaluated = np.zeros(
+    len(clean_embeddings),
+    dtype=bool
+)
+
+synthetic_evaluated = np.zeros(
+    len(synthetic_embeddings),
+    dtype=bool
 )
 
 
-for fold, (train_idx, val_idx) in enumerate(
+# ============================================================
+# FOLD LOOP
+# ============================================================
+
+for fold, (train_indices, validation_indices) in enumerate(
     kf.split(clean_embeddings),
     start=1
 ):
 
-    train_embeddings = (
-        clean_embeddings[train_idx]
+    print(
+        f"\nFold {fold}/{N_SPLITS}"
     )
 
-    val_embeddings = (
-        clean_embeddings[val_idx]
+    print(
+        "Training clean:",
+        len(train_indices)
+    )
+
+    print(
+        "Validation clean:",
+        len(validation_indices)
+    )
+
+
+    # --------------------------------------------------------
+    # Training clean embeddings become the reference set.
+    # --------------------------------------------------------
+
+    reference_embeddings = (
+        clean_embeddings[train_indices]
+    )
+
+
+    # --------------------------------------------------------
+    # Fit kNN reference model.
+    # --------------------------------------------------------
+
+    n_neighbors = min(
+        K,
+        len(reference_embeddings)
     )
 
     knn = NearestNeighbors(
-        n_neighbors=K,
+        n_neighbors=n_neighbors,
         metric="euclidean"
     )
 
     knn.fit(
-        train_embeddings
+        reference_embeddings
     )
 
-    distances, _ = knn.kneighbors(
-        val_embeddings
+
+    # --------------------------------------------------------
+    # Score validation clean samples.
+    # --------------------------------------------------------
+
+    validation_clean_embeddings = (
+        clean_embeddings[validation_indices]
     )
 
-    clean_scores[val_idx] = (
-        distances.mean(axis=1)
+    clean_distances, _ = knn.kneighbors(
+        validation_clean_embeddings
     )
+
+    validation_clean_scores = (
+        clean_distances.mean(axis=1)
+    )
+
+
+    clean_scores[validation_indices] = (
+        validation_clean_scores
+    )
+
+    clean_evaluated[validation_indices] = True
+
+
+    # --------------------------------------------------------
+    # Find synthetic samples whose SOURCE CLEAN SAMPLE
+    # belongs to this validation fold.
+    # --------------------------------------------------------
+
+    validation_set = set(
+        validation_indices.tolist()
+    )
+
+    synthetic_fold_indices = []
+
+    for synthetic_index, source_index in enumerate(
+        source_indices
+    ):
+
+        if int(source_index) in validation_set:
+
+            synthetic_fold_indices.append(
+                synthetic_index
+            )
+
+
+    synthetic_fold_indices = np.array(
+        synthetic_fold_indices,
+        dtype=np.int64
+    )
+
 
     print(
-        f"Fold {fold}/{N_SPLITS} completed"
+        "Synthetic validation samples:",
+        len(synthetic_fold_indices)
     )
 
 
+    # --------------------------------------------------------
+    # Score corresponding synthetic samples against the
+    # SAME reference set.
+    # --------------------------------------------------------
+
+    if len(synthetic_fold_indices) > 0:
+
+        validation_synthetic_embeddings = (
+            synthetic_embeddings[
+                synthetic_fold_indices
+            ]
+        )
+
+        synthetic_distances, _ = knn.kneighbors(
+            validation_synthetic_embeddings
+        )
+
+        validation_synthetic_scores = (
+            synthetic_distances.mean(axis=1)
+        )
+
+        synthetic_scores[
+            synthetic_fold_indices
+        ] = validation_synthetic_scores
+
+        synthetic_evaluated[
+            synthetic_fold_indices
+        ] = True
+
+
 # ============================================================
-# FIT ON ALL CLEAN DATA
+# VALIDATION CHECK
 # ============================================================
 
-print("\nCalculating synthetic anomaly scores...")
+if not np.all(clean_evaluated):
 
-knn = NearestNeighbors(
-    n_neighbors=K,
-    metric="euclidean"
-)
+    missing = np.sum(
+        ~clean_evaluated
+    )
 
-knn.fit(
-    clean_embeddings
-)
+    raise RuntimeError(
+        f"{missing} clean samples were not evaluated."
+    )
 
-synthetic_distances, _ = knn.kneighbors(
-    synthetic_embeddings
-)
 
-synthetic_scores = (
-    synthetic_distances.mean(axis=1)
+if not np.all(synthetic_evaluated):
+
+    missing = np.sum(
+        ~synthetic_evaluated
+    )
+
+    raise RuntimeError(
+        f"{missing} synthetic samples were not evaluated."
+    )
+
+
+print("\nAll clean samples evaluated.")
+
+print(
+    "All synthetic samples evaluated."
 )
 
 
 # ============================================================
-# EVALUATE EACH TYPE
+# EVALUATE EACH ANOMALY TYPE
 # ============================================================
 
-anomaly_types = sorted(
-    np.unique(synthetic_types)
-)
+print("\n")
+print("=" * 70)
+print("PAIRED ANOMALY TYPE RESULTS")
+print("=" * 70)
+
 
 results = []
 
 
-for anomaly_type in anomaly_types:
-
-    print("\n" + "=" * 60)
-
-    print(
-        f"Evaluating: {anomaly_type}"
+anomaly_types = sorted(
+    np.unique(
+        synthetic_types
     )
+)
+
+
+for anomaly_type in anomaly_types:
 
     mask = (
         synthetic_types
         == anomaly_type
     )
 
-    type_scores = (
+
+    type_synthetic_scores = (
         synthetic_scores[mask]
     )
 
-    type_labels = np.ones(
-        len(type_scores)
+
+    # --------------------------------------------------------
+    # Use the clean samples that correspond to the synthetic
+    # samples of THIS anomaly type.
+    #
+    # This makes the comparison paired.
+    # --------------------------------------------------------
+
+    type_source_indices = (
+        source_indices[mask]
     )
 
-    clean_labels = np.zeros(
-        len(clean_scores)
+
+    type_clean_scores = (
+        clean_scores[
+            type_source_indices
+        ]
     )
 
-    y_true = np.concatenate([
-        clean_labels,
-        type_labels
-    ])
 
-    scores = np.concatenate([
-        clean_scores,
-        type_scores
-    ])
+    # --------------------------------------------------------
+    # Labels:
+    #
+    # 0 = clean
+    # 1 = synthetic anomaly
+    # --------------------------------------------------------
 
-    auc = roc_auc_score(
+    y_true = np.concatenate(
+        [
+            np.zeros(
+                len(type_clean_scores)
+            ),
+            np.ones(
+                len(type_synthetic_scores)
+            )
+        ]
+    )
+
+
+    y_scores = np.concatenate(
+        [
+            type_clean_scores,
+            type_synthetic_scores
+        ]
+    )
+
+
+    roc_auc = roc_auc_score(
         y_true,
-        scores
+        y_scores
     )
 
-    ap = average_precision_score(
-        y_true,
-        scores
+    average_precision = (
+        average_precision_score(
+            y_true,
+            y_scores
+        )
     )
 
-    results.append({
-        "anomaly_type": anomaly_type,
-        "count": len(type_scores),
-        "mean_clean_score": clean_scores.mean(),
-        "mean_anomaly_score": type_scores.mean(),
-        "roc_auc": auc,
-        "average_precision": ap
-    })
+
+    clean_mean = (
+        np.mean(
+            type_clean_scores
+        )
+    )
+
+    synthetic_mean = (
+        np.mean(
+            type_synthetic_scores
+        )
+    )
+
+    score_change = (
+        synthetic_mean
+        - clean_mean
+    )
+
+
+    results.append(
+        {
+            "anomaly_type": anomaly_type,
+
+            "n_synthetic":
+                len(type_synthetic_scores),
+
+            "n_clean":
+                len(type_clean_scores),
+
+            "clean_mean_score":
+                clean_mean,
+
+            "synthetic_mean_score":
+                synthetic_mean,
+
+            "mean_score_change":
+                score_change,
+
+            "roc_auc":
+                roc_auc,
+
+            "average_precision":
+                average_precision
+        }
+    )
+
 
     print(
-        f"Samples: {len(type_scores)}"
+        f"\n{anomaly_type}"
     )
 
     print(
-        f"Mean clean score: "
-        f"{clean_scores.mean():.4f}"
+        "  Clean samples:",
+        len(type_clean_scores)
     )
 
     print(
-        f"Mean anomaly score: "
-        f"{type_scores.mean():.4f}"
+        "  Synthetic samples:",
+        len(type_synthetic_scores)
     )
 
     print(
-        f"ROC-AUC: {auc:.4f}"
+        f"  Clean mean score: "
+        f"{clean_mean:.6f}"
     )
 
     print(
-        f"Average Precision: {ap:.4f}"
+        f"  Synthetic mean score: "
+        f"{synthetic_mean:.6f}"
+    )
+
+    print(
+        f"  Mean score change: "
+        f"{score_change:+.6f}"
+    )
+
+    print(
+        f"  ROC-AUC: "
+        f"{roc_auc:.6f}"
+    )
+
+    print(
+        f"  Average Precision: "
+        f"{average_precision:.6f}"
     )
 
 
@@ -249,11 +545,6 @@ results_df = pd.DataFrame(
     results
 )
 
-results_df = results_df.sort_values(
-    "roc_auc",
-    ascending=False
-)
-
 results_df.to_csv(
     OUTPUT_FILE,
     index=False
@@ -261,12 +552,12 @@ results_df.to_csv(
 
 
 # ============================================================
-# FINAL TABLE
+# FINAL
 # ============================================================
 
 print("\n")
 print("=" * 70)
-print("PER-ANOMALY-TYPE RESULTS")
+print("EVALUATION COMPLETE")
 print("=" * 70)
 
 print(
