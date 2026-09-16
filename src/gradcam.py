@@ -12,7 +12,7 @@ from torchvision.models import resnet50, ResNet50_Weights
 # CONFIGURATION
 # ============================================================
 
-SAMPLE_ID = "a01-063"
+SAMPLE_ID = "p06-052"
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
