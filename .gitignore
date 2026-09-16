@@ -198,4 +198,4 @@ __pycache__/
 .vscode/
 
 # Generated analysis outputs
-data/metadata/
+data/
