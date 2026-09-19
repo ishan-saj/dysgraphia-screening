@@ -315,21 +315,16 @@ for _, row in reference_df.iterrows():
         skipped += 1
         continue
 
-    # Load each form image only once
-    if form_id not in image_cache:
-
+        # Load each form image only once
+    try:
         image = cv2.imread(
             str(image_map[form_id]),
             cv2.IMREAD_GRAYSCALE
         )
-
-        image_cache[form_id] = image
-
-    else:
-
-        image = image_cache[form_id]
-
-    if image is None:
+        if image is None:
+            skipped += 1
+            continue
+    except Exception:
         skipped += 1
         continue
 
