@@ -3,6 +3,7 @@ import random
 import cv2
 import numpy as np
 import pandas as pd
+import xml.etree.ElementTree as ET
 
 
 # ============================================================
@@ -17,6 +18,13 @@ IMAGE_ROOT = (
     / "raw"
     / "IAM"
     / "images"
+)
+XML_ROOT = (
+    PROJECT_ROOT
+    / "data"
+    / "raw"
+    / "IAM"
+    / "xml"
 )
 
 OUTPUT_ROOT = (
@@ -84,34 +92,62 @@ def find_images():
 
 
 # ============================================================
-# CREATE HANDWRITING MASK
+# CREATE HANDWRITING MASK USING IAM XML
 # ============================================================
 
-def create_handwriting_mask(image):
-
-    # Adaptive threshold for handwriting
-    binary = cv2.adaptiveThreshold(
+def create_handwriting_mask(image, xml_path):
+    h, w = image.shape
+    # Binary image:
+    # black handwriting -> white mask
+    binary = cv2.threshold(
         image,
+        0,
         255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        31,
-        15
+        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )[1]
+
+    handwriting_mask = np.zeros(
+        (h, w),
+        dtype=np.uint8
     )
 
-    # Remove tiny noise
-    kernel = np.ones(
-        (3, 3),
-        np.uint8
-    )
+    # Read IAM XML
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
 
-    cleaned = cv2.morphologyEx(
-        binary,
+    # IAM <cmp> boxes correspond to handwritten components
+    for cmp in root.iter("cmp"):
+
+        x = int(cmp.attrib["x"])
+        y = int(cmp.attrib["y"])
+        width = int(cmp.attrib["width"])
+        height = int(cmp.attrib["height"])
+
+        x1 = max(0, x)
+        y1 = max(0, y)
+        x2 = min(w, x + width)
+        y2 = min(h, y + height)
+
+        if x1 >= x2 or y1 >= y2:
+            continue
+
+        # Keep only actual dark pixels inside
+        # the IAM handwritten component box
+        handwriting_mask[y1:y2, x1:x2] = cv2.bitwise_or(
+            handwriting_mask[y1:y2, x1:x2],
+            binary[y1:y2, x1:x2]
+        )
+
+    # Remove tiny isolated noise
+    kernel = np.ones((2, 2), np.uint8)
+
+    handwriting_mask = cv2.morphologyEx(
+        handwriting_mask,
         cv2.MORPH_OPEN,
         kernel
     )
 
-    return cleaned
+    return handwriting_mask
 
 
 # ============================================================
@@ -122,6 +158,7 @@ def create_random_mask(ink_mask):
 
     h, w = ink_mask.shape
 
+    # Find pixels that belong to handwriting
     ys, xs = np.where(
         ink_mask > 0
     )
@@ -134,7 +171,7 @@ def create_random_mask(ink_mask):
     if len(xs) == 0:
         return mask
 
-    # Pick an actual handwriting pixel
+    # Pick a random actual handwriting pixel
     index = random.randint(
         0,
         len(xs) - 1
@@ -183,21 +220,21 @@ def create_random_mask(ink_mask):
         y1 + region_height
     )
 
+    # Create rectangular candidate region
     mask[
         y1:y2,
         x1:x2
     ] = 255
 
-    # Only keep anomaly region overlapping handwriting
+    # Keep ONLY handwriting pixels
     mask = cv2.bitwise_and(
         mask,
         ink_mask
     )
 
-    # Slightly expand the region so the
-    # ground-truth mask covers the modification
+    # Slightly expand handwriting pixels
     kernel = np.ones(
-        (5, 5),
+        (3, 3),
         np.uint8
     )
 
@@ -207,8 +244,16 @@ def create_random_mask(ink_mask):
         iterations=1
     )
 
-    return mask
+    # IMPORTANT:
+    # Constrain again to handwriting.
+    # This prevents dilation from entering
+    # printed text near the handwriting.
+    mask = cv2.bitwise_and(
+        mask,
+        ink_mask
+    )
 
+    return mask
 
 # ============================================================
 # THICKEN HANDWRITING
@@ -372,13 +417,29 @@ def main():
         f"synthetic form anomalies..."
     )
 
-    for i in range(
-        NUM_SAMPLES
-    ):
+    for i in range(NUM_SAMPLES):
 
-        source_path = random.choice(
-            images
-        )
+        # ----------------------------------------------------
+        # Select a random IAM form
+        # ----------------------------------------------------
+
+        source_path = random.choice(images)
+
+        # Corresponding IAM XML annotation
+        xml_path = XML_ROOT / f"{source_path.stem}.xml"
+
+        if not xml_path.exists():
+
+            print(
+                f"Skipping {source_path.stem}: "
+                f"XML not found."
+            )
+
+            continue
+
+        # ----------------------------------------------------
+        # Load image
+        # ----------------------------------------------------
 
         image = cv2.imread(
             str(source_path),
@@ -386,17 +447,37 @@ def main():
         )
 
         if image is None:
+
+            print(
+                f"Skipping {source_path.stem}: "
+                f"image could not be loaded."
+            )
+
             continue
 
+        # ----------------------------------------------------
+        # Create handwriting-only mask
+        # using IAM XML annotations
+        # ----------------------------------------------------
+
         ink_mask = create_handwriting_mask(
-            image
+            image,
+            xml_path
         )
+
+        # ----------------------------------------------------
+        # Create random anomaly region
+        # ONLY inside handwriting
+        # ----------------------------------------------------
 
         anomaly_mask = create_random_mask(
             ink_mask
         )
 
+        # ----------------------------------------------------
         # Retry if mask is empty
+        # ----------------------------------------------------
+
         attempts = 0
 
         while (
@@ -411,17 +492,35 @@ def main():
             attempts += 1
 
         if np.sum(anomaly_mask > 0) == 0:
+
+            print(
+                f"Skipping {source_path.stem}: "
+                f"could not create anomaly mask."
+            )
+
             continue
+
+        # ----------------------------------------------------
+        # Select anomaly type
+        # ----------------------------------------------------
 
         anomaly_type = random.choice(
             ANOMALY_TYPES
         )
+
+        # ----------------------------------------------------
+        # Apply anomaly
+        # ----------------------------------------------------
 
         synthetic_image = apply_anomaly(
             image,
             anomaly_mask,
             anomaly_type
         )
+
+        # ----------------------------------------------------
+        # Generate filenames
+        # ----------------------------------------------------
 
         sample_id = (
             f"synthetic_form_{i + 1:05d}"
@@ -443,15 +542,27 @@ def main():
             MASK_OUTPUT / mask_name
         )
 
+        # ----------------------------------------------------
+        # Save synthetic image
+        # ----------------------------------------------------
+
         cv2.imwrite(
             str(image_path),
             synthetic_image
         )
 
+        # ----------------------------------------------------
+        # Save ground-truth anomaly mask
+        # ----------------------------------------------------
+
         cv2.imwrite(
             str(mask_path),
             anomaly_mask
         )
+
+        # ----------------------------------------------------
+        # Store metadata
+        # ----------------------------------------------------
 
         records.append({
 
@@ -490,12 +601,20 @@ def main():
 
         })
 
+        # ----------------------------------------------------
+        # Progress
+        # ----------------------------------------------------
+
         if len(records) % 100 == 0:
 
             print(
                 f"Generated "
                 f"{len(records)}/{NUM_SAMPLES}"
             )
+
+    # ========================================================
+    # SAVE CSV
+    # ========================================================
 
     df = pd.DataFrame(
         records
@@ -507,6 +626,7 @@ def main():
     )
 
     print()
+
     print(
         "Synthetic form anomaly generation done."
     )
@@ -530,6 +650,7 @@ def main():
     if len(df) > 0:
 
         print()
+
         print(
             "Anomaly distribution:"
         )

@@ -1,9 +1,9 @@
 from pathlib import Path
 import pandas as pd
 import torch
-from torchvision.models import resnet50, ResNet50_Weights
-import cv2
+import numpy as np
 
+from sklearn.model_selection import KFold
 
 from model import DysgraphiaModel
 
@@ -15,7 +15,10 @@ from model import DysgraphiaModel
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 METADATA_FILE = (
-    PROJECT_ROOT / "data" / "metadata" / "metadata_all.csv"
+    PROJECT_ROOT
+    / "data"
+    / "metadata"
+    / "metadata_all.csv"
 )
 
 SYNTHETIC_FILE = (
@@ -26,11 +29,15 @@ SYNTHETIC_FILE = (
 )
 
 FEATURE_FILE = (
-    PROJECT_ROOT / "data" / "metadata" / "resnet_features.pt"
+    PROJECT_ROOT
+    / "data"
+    / "metadata"
+    / "resnet_features.pt"
 )
 
 CHECKPOINT_FILE = (
-    PROJECT_ROOT / "best_dysgraphia_encoder.pth"
+    PROJECT_ROOT
+    / "best_dysgraphia_encoder.pth"
 )
 
 OUTPUT_FILE = (
@@ -40,12 +47,8 @@ OUTPUT_FILE = (
     / "paired_clean_vs_synthetic.csv"
 )
 
-SYNTHETIC_IMAGE_DIR = (
-    PROJECT_ROOT
-    / "data"
-    / "synthetic_form_anomalies"
-    / "images"
-)
+N_SPLITS = 5
+RANDOM_STATE = 42
 
 
 # ============================================================
@@ -58,18 +61,22 @@ print("Device:", device)
 
 
 # ============================================================
-# LOAD METADATA
+# LOAD DATA
 # ============================================================
+
+print("=" * 70)
+print("PAIRED CLEAN VS SYNTHETIC ANALYSIS")
+print("=" * 70)
 
 metadata = pd.read_csv(METADATA_FILE)
 synthetic = pd.read_csv(SYNTHETIC_FILE)
 
-print("Clean metadata:", len(metadata))
+print("\nClean metadata:", len(metadata))
 print("Synthetic samples:", len(synthetic))
 
 
 # ============================================================
-# SOURCE FORM ID FIX
+# FORM ID NORMALIZATION
 # ============================================================
 
 FORM_ID_MAP = {
@@ -78,8 +85,20 @@ FORM_ID_MAP = {
     "g06-037b(1)": "g06-037b",
 }
 
+
+def normalize_form_id(form_id):
+
+    form_id = str(form_id)
+
+    return FORM_ID_MAP.get(
+        form_id,
+        form_id
+    )
+
+
 synthetic["clean_form_id"] = (
-    synthetic["source_form"].replace(FORM_ID_MAP)
+    synthetic["source_form"]
+    .apply(normalize_form_id)
 )
 
 
@@ -87,20 +106,29 @@ synthetic["clean_form_id"] = (
 # LOAD CHECKPOINT
 # ============================================================
 
+print("\nLoading checkpoint...")
+
 checkpoint = torch.load(
     CHECKPOINT_FILE,
     map_location=device,
     weights_only=False
 )
 
-feature_mean = checkpoint["feature_mean"].float()
-feature_std = checkpoint["feature_std"].float()
+feature_mean = (
+    checkpoint["feature_mean"]
+    .float()
+)
+
+feature_std = (
+    checkpoint["feature_std"]
+    .float()
+)
 
 print("Checkpoint loaded")
 
 
 # ============================================================
-# CREATE MODEL TEMPLATE
+# CREATE MODEL
 # ============================================================
 
 model_template = DysgraphiaModel(
@@ -109,54 +137,82 @@ model_template = DysgraphiaModel(
 )
 
 
-# ============================================================
-# CACHED FEATURE MODEL
-# ============================================================
-
 class CachedFusionModel(torch.nn.Module):
 
     def __init__(self, template):
+
         super().__init__()
 
-        self.opencv_encoder = template.opencv_encoder
-        self.attention = template.attention
-        self.projection_head = template.projection_head
+        self.opencv_encoder = (
+            template.opencv_encoder
+        )
+
+        self.attention = (
+            template.attention
+        )
+
+        self.projection_head = (
+            template.projection_head
+        )
+
         self.opencv_reconstruction = (
             template.opencv_reconstruction
         )
 
-    def forward(self, image_features, opencv_features):
+    def forward(
+        self,
+        image_features,
+        opencv_features
+    ):
 
-        encoded_opencv = self.opencv_encoder(
-            opencv_features
+        encoded_opencv = (
+            self.opencv_encoder(
+                opencv_features
+            )
         )
 
         fused_features = torch.cat(
-            [image_features, encoded_opencv],
+            [
+                image_features,
+                encoded_opencv
+            ],
             dim=1
         )
 
         embedding, attention_weights = (
-            self.attention(fused_features)
+            self.attention(
+                fused_features
+            )
         )
 
-        projection = self.projection_head(
-            embedding
+        projection = (
+            self.projection_head(
+                embedding
+            )
         )
 
         reconstructed_opencv = (
-            self.opencv_reconstruction(embedding)
+            self.opencv_reconstruction(
+                embedding
+            )
         )
 
         return {
             "embedding": embedding,
-            "attention_weights": attention_weights,
-            "projection": projection,
-            "reconstructed_opencv": reconstructed_opencv
+            "attention_weights":
+                attention_weights,
+
+            "projection":
+                projection,
+
+            "reconstructed_opencv":
+                reconstructed_opencv
         }
 
 
-model = CachedFusionModel(model_template)
+model = CachedFusionModel(
+    model_template
+)
 
 model.load_state_dict(
     checkpoint["model_state_dict"],
@@ -166,12 +222,14 @@ model.load_state_dict(
 model.to(device)
 model.eval()
 
-print("Cached fusion model loaded")
+print("Fusion model loaded")
 
 
 # ============================================================
-# LOAD CACHED CLEAN RESNET FEATURES
+# LOAD CACHED CLEAN FEATURES
 # ============================================================
+
+print("\nLoading cached clean features...")
 
 cached = torch.load(
     FEATURE_FILE,
@@ -180,29 +238,80 @@ cached = torch.load(
 )
 
 cached_image_features = (
-    cached["image_features"].float()
+    cached["image_features"]
+    .float()
 )
 
 cached_opencv_features = (
-    cached["opencv_features"].float()
+    cached["opencv_features"]
+    .float()
 )
 
-cached_sample_ids = cached["sample_ids"]
+cached_sample_ids = [
+    str(x)
+    for x in cached["sample_ids"]
+]
 
 print(
-    "Cached image features:",
+    "Image features:",
     cached_image_features.shape
 )
 
+print(
+    "OpenCV features:",
+    cached_opencv_features.shape
+)
+
 
 # ============================================================
-# CLEAN REFERENCE EMBEDDINGS
+# CREATE SAMPLE ID LOOKUP
 # ============================================================
+
+sample_id_to_index = {}
+
+for i, sample_id in enumerate(
+    cached_sample_ids
+):
+
+    sample_id_to_index[
+        str(sample_id)
+    ] = i
+
+
+# ============================================================
+# CREATE FORM → SAMPLE LOOKUP
+# ============================================================
+
+form_to_sample = {}
+
+for _, row in metadata.iterrows():
+
+    form_id = str(
+        row["form_id"]
+    )
+
+    sample_id = str(
+        row["sample_id"]
+    )
+
+    form_to_sample[
+        form_id
+    ] = sample_id
+
+
+# ============================================================
+# GENERATE ALL CLEAN EMBEDDINGS
+# ============================================================
+
+print(
+    "\nGenerating clean embeddings..."
+)
 
 with torch.no_grad():
 
     normalized_opencv = (
-        cached_opencv_features - feature_mean
+        cached_opencv_features
+        - feature_mean
     ) / feature_std
 
     clean_outputs = model(
@@ -210,323 +319,419 @@ with torch.no_grad():
         normalized_opencv
     )
 
-    clean_embeddings = (
+    all_clean_embeddings = (
         clean_outputs["embedding"]
+        .cpu()
     )
-
-
-# ============================================================
-# REFERENCE EMBEDDING
-# ============================================================
-
-reference_embedding = (
-    clean_embeddings.mean(dim=0)
-)
-
-print("Reference embedding calculated")
-
-
-# ============================================================
-# BUILD FORM LOOKUP
-# ============================================================
-
-clean_lookup = {}
-
-for index, row in metadata.iterrows():
-
-    form_id = str(row["form_id"])
-
-    image_path = (
-        PROJECT_ROOT / row["image_path"]
-    )
-
-    opencv_features = torch.tensor(
-        [
-            row["skew"],
-            row["baseline_deviation"],
-            row["word_spacing_cv"],
-            row["character_height_cv"],
-            row["average_word_height"],
-            row["average_word_width"],
-            row["stroke_density"],
-            row["slant_angle"],
-            row["writing_area"],
-        ],
-        dtype=torch.float32
-    )
-
-    clean_lookup[form_id] = {
-        "sample_id": str(row["sample_id"]),
-        "image_path": image_path,
-        "opencv_features": opencv_features,
-    }
 
 
 print(
-    "Clean forms available:",
-    len(clean_lookup)
+    "Clean embeddings:",
+    all_clean_embeddings.shape
 )
 
 
 # ============================================================
-# RESNET50 FOR SYNTHETIC IMAGES
+# VALIDATE SYNTHETIC → CLEAN MATCHING
 # ============================================================
 
-weights = ResNet50_Weights.DEFAULT
+print(
+    "\nChecking synthetic-to-clean matching..."
+)
 
-resnet = resnet50(weights=weights)
+missing_forms = []
 
-resnet.fc = torch.nn.Identity()
+for _, row in synthetic.iterrows():
 
-resnet.to(device)
-resnet.eval()
-
-print("ResNet50 loaded")
-
-
-# ============================================================
-# IMAGE PREPROCESSING
-# ============================================================
-
-def load_image(image_path):
-
-    image = cv2.imread(
-        str(image_path),
-        cv2.IMREAD_GRAYSCALE
+    form_id = str(
+        row["clean_form_id"]
     )
 
-    if image is None:
-        raise FileNotFoundError(
-            f"Could not read image: {image_path}"
-        )
+    if form_id not in form_to_sample:
 
-    image = cv2.resize(
-        image,
-        (224, 224)
+        missing_forms.append(form_id)
+
+if missing_forms:
+
+    print(
+        "ERROR: Missing clean forms:"
     )
 
-    image = cv2.cvtColor(
-        image,
-        cv2.COLOR_GRAY2RGB
+    print(
+        sorted(set(missing_forms))
     )
 
-    image = (
-        torch.from_numpy(image)
-        .float()
-        / 255.0
+    raise RuntimeError(
+        "Synthetic forms could not "
+        "be matched to clean forms."
     )
 
-    image = image.permute(2, 0, 1)
 
-    return image
-
-
-# ============================================================
-# IMAGE FEATURE EXTRACTION
-# ============================================================
-
-def get_image_feature(image_path):
-
-    image = load_image(image_path)
-
-    image = image.unsqueeze(0).to(device)
-
-    mean = torch.tensor(
-        [0.485, 0.456, 0.406],
-        dtype=torch.float32
-    ).view(1, 3, 1, 1)
-
-    std = torch.tensor(
-        [0.229, 0.224, 0.225],
-        dtype=torch.float32
-    ).view(1, 3, 1, 1)
-
-    image = (
-        image - mean
-    ) / std
-
-    with torch.no_grad():
-
-        features = resnet(image)
-
-    return features.squeeze(0)
+print(
+    "All synthetic forms matched "
+    "to clean IAM forms."
+)
 
 
 # ============================================================
-# CALCULATE CLEAN SCORE
+# BUILD FORM INDEX
 # ============================================================
 
-clean_scores = {}
+clean_form_indices = []
 
-print("Calculating clean scores...")
+clean_form_ids = []
 
+for form_id, sample_id in form_to_sample.items():
 
-with torch.no_grad():
+    if sample_id not in sample_id_to_index:
 
-    for index, row in metadata.iterrows():
+        continue
 
-        form_id = str(row["form_id"])
+    clean_form_ids.append(
+        form_id
+    )
 
-        # Find matching cached sample
-        matches = [
-            i
-            for i, sid in enumerate(cached_sample_ids)
-            if str(sid) == str(row["sample_id"])
+    clean_form_indices.append(
+        sample_id_to_index[
+            sample_id
         ]
+    )
 
-        if len(matches) == 0:
-            continue
 
-        cached_index = matches[0]
+clean_form_indices = np.array(
+    clean_form_indices
+)
 
-        embedding = (
-            clean_embeddings[cached_index]
-        )
-
-        score = torch.norm(
-            embedding - reference_embedding
-        ).item()
-
-        clean_scores[form_id] = score
-
+clean_form_ids = np.array(
+    clean_form_ids
+)
 
 print(
-    "Clean scores calculated:",
-    len(clean_scores)
+    "Forms available for CV:",
+    len(clean_form_indices)
 )
 
 
 # ============================================================
-# SYNTHETIC SCORES
+# 5-FOLD PAIRED EVALUATION
 # ============================================================
 
+print()
+print("=" * 70)
+print("5-FOLD PAIRED EVALUATION")
+print("=" * 70)
+
+
+kf = KFold(
+    n_splits=N_SPLITS,
+    shuffle=True,
+    random_state=RANDOM_STATE
+)
+
+
+# This will contain one row per synthetic sample
 results = []
 
-print("\nProcessing synthetic anomalies...")
 
+for fold_number, (
+    train_indices,
+    test_indices
+) in enumerate(
+    kf.split(clean_form_indices),
+    start=1
+):
 
-with torch.no_grad():
+    print(
+        f"\nFold {fold_number}/{N_SPLITS}"
+    )
 
-    for index, row in synthetic.iterrows():
+    # --------------------------------------------------------
+    # Training clean forms
+    # --------------------------------------------------------
 
-        form_id = row["clean_form_id"]
+    train_embedding_indices = (
+        clean_form_indices[
+            train_indices
+        ]
+    )
 
-        if form_id not in clean_lookup:
+    # --------------------------------------------------------
+    # Held-out clean forms
+    # --------------------------------------------------------
 
-            print(
-                "WARNING: form not found:",
-                form_id
-            )
+    test_embedding_indices = (
+        clean_form_indices[
+            test_indices
+        ]
+    )
 
-            continue
+    # --------------------------------------------------------
+    # Build reference ONLY from training clean forms
+    # --------------------------------------------------------
 
-        info = clean_lookup[form_id]
+    reference_embedding = (
+        all_clean_embeddings[
+            train_embedding_indices
+        ].mean(dim=0)
+    )
 
-        if form_id not in clean_scores:
+    # --------------------------------------------------------
+    # Map held-out form IDs
+    # --------------------------------------------------------
 
-            print(
-                "WARNING: clean score missing:",
-                form_id
-            )
+    held_out_form_ids = set(
+        clean_form_ids[
+            test_indices
+        ]
+    )
 
-            continue
+    # --------------------------------------------------------
+    # Process synthetic samples belonging to
+    # held-out clean forms
+    # --------------------------------------------------------
 
+    fold_results = 0
 
-        # ----------------------------------------------------
-        # Synthetic image path
-        # ----------------------------------------------------
+    for _, row in synthetic.iterrows():
 
-        synthetic_image = (
-            PROJECT_ROOT
-            / row["synthetic_image"]
+        form_id = str(
+            row["clean_form_id"]
         )
 
-        if not synthetic_image.exists():
-
-            synthetic_image = (
-                SYNTHETIC_IMAGE_DIR
-                / Path(
-                    row["synthetic_image"]
-                ).name
-            )
-
-
-        if not synthetic_image.exists():
-
-            print(
-                "WARNING: synthetic image missing:",
-                synthetic_image
-            )
+        if form_id not in held_out_form_ids:
 
             continue
 
-
         # ----------------------------------------------------
-        # ResNet feature
+        # Corresponding clean embedding
         # ----------------------------------------------------
 
-        image_feature = (
-            get_image_feature(
-                synthetic_image
-            )
+        sample_id = form_to_sample[
+            form_id
+        ]
+
+        clean_index = (
+            sample_id_to_index[
+                sample_id
+            ]
         )
 
+        clean_embedding = (
+            all_clean_embeddings[
+                clean_index
+            ]
+        )
 
         # ----------------------------------------------------
-        # ORIGINAL CLEAN OpenCV FEATURES
+        # IMPORTANT
         #
-        # IMPORTANT:
-        # We intentionally keep these unchanged.
-        # Therefore the benchmark tests the effect
-        # of image corruption only.
+        # The synthetic image embedding must come from
+        # the paired synthetic dataset.
+        #
+        # We use the source index saved by
+        # save_paired_embeddings.py when available.
         # ----------------------------------------------------
 
-        opencv_feature = (
-            info["opencv_features"]
+        # Find corresponding synthetic embedding later
+        # from paired_embeddings.npz.
+        #
+        # This script therefore expects that file.
+        #
+        # We handle that below after loading it.
+        fold_results += 1
+
+    print(
+        "Held-out synthetic samples:",
+        fold_results
+    )
+
+
+# ============================================================
+# LOAD PAIRED EMBEDDINGS
+# ============================================================
+
+PAIRED_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "synthetic_form_anomalies"
+    / "paired_embeddings.npz"
+)
+
+if not PAIRED_FILE.exists():
+
+    raise FileNotFoundError(
+        "\npaired_embeddings.npz not found.\n"
+        "Run save_paired_embeddings.py first."
+    )
+
+
+print(
+    "\nLoading paired embeddings..."
+)
+
+paired = np.load(
+    PAIRED_FILE,
+    allow_pickle=True
+)
+
+paired_clean_embeddings = torch.tensor(
+    paired["clean_embeddings"],
+    dtype=torch.float32
+)
+
+paired_synthetic_embeddings = torch.tensor(
+    paired["synthetic_embeddings"],
+    dtype=torch.float32
+)
+
+paired_anomaly_types = (
+    paired["synthetic_types"]
+)
+
+source_indices = (
+    paired["source_indices"]
+)
+
+print(
+    "Paired clean embeddings:",
+    paired_clean_embeddings.shape
+)
+
+print(
+    "Paired synthetic embeddings:",
+    paired_synthetic_embeddings.shape
+)
+
+print(
+    "Source indices:",
+    source_indices.shape
+)
+
+
+# ============================================================
+# SECOND 5-FOLD PASS USING PAIRED EMBEDDINGS
+# ============================================================
+
+print()
+print("=" * 70)
+print("CALCULATING PAIRED SCORE CHANGES")
+print("=" * 70)
+
+
+# ------------------------------------------------------------
+# Use the unique clean source indices represented by
+# the synthetic dataset.
+# ------------------------------------------------------------
+
+unique_source_indices = np.unique(
+    source_indices
+)
+
+print(
+    "Unique source forms:",
+    len(unique_source_indices)
+)
+
+
+# Map clean feature index → fold assignment
+source_to_position = {
+    int(source_index): position
+    for position, source_index
+    in enumerate(unique_source_indices)
+}
+
+
+kf = KFold(
+    n_splits=N_SPLITS,
+    shuffle=True,
+    random_state=RANDOM_STATE
+)
+
+
+# Store score changes
+paired_results = []
+
+
+for fold_number, (
+    train_positions,
+    test_positions
+) in enumerate(
+    kf.split(unique_source_indices),
+    start=1
+):
+
+    print(
+        f"Processing fold "
+        f"{fold_number}/{N_SPLITS}..."
+    )
+
+    train_source_indices = (
+        unique_source_indices[
+            train_positions
+        ]
+    )
+
+    test_source_indices = (
+        unique_source_indices[
+            test_positions
+        ]
+    )
+
+    # --------------------------------------------------------
+    # Reference from TRAINING clean forms only
+    # --------------------------------------------------------
+
+    train_mask = np.isin(
+        np.arange(
+            len(paired_clean_embeddings)
+        ),
+        train_source_indices
+    )
+
+    reference_embedding = (
+        paired_clean_embeddings[
+            train_source_indices
+        ].mean(dim=0)
+    )
+
+    # --------------------------------------------------------
+    # Evaluate synthetic samples whose source form
+    # belongs to held-out set
+    # --------------------------------------------------------
+
+    for i in range(
+        len(paired_synthetic_embeddings)
+    ):
+
+        source_index = int(
+            source_indices[i]
         )
 
-        normalized_opencv = (
-            opencv_feature
-            - feature_mean
-        ) / feature_std
+        if source_index not in test_source_indices:
 
+            continue
 
-        # ----------------------------------------------------
-        # Synthetic embedding
-        # ----------------------------------------------------
-
-        output = model(
-            image_feature.unsqueeze(0),
-            normalized_opencv.unsqueeze(0)
+        clean_embedding = (
+            paired_clean_embeddings[
+                source_index
+            ]
         )
 
-        embedding = (
-            output["embedding"]
-            .squeeze(0)
+        synthetic_embedding = (
+            paired_synthetic_embeddings[
+                i
+            ]
         )
 
-
-        # ----------------------------------------------------
-        # Synthetic anomaly score
-        # ----------------------------------------------------
-
-        synthetic_score = torch.norm(
-            embedding - reference_embedding
+        clean_score = torch.norm(
+            clean_embedding
+            - reference_embedding
         ).item()
 
-
-        # ----------------------------------------------------
-        # Clean score
-        # ----------------------------------------------------
-
-        clean_score = (
-            clean_scores[form_id]
-        )
-
-
-        # ----------------------------------------------------
-        # Score change
-        # ----------------------------------------------------
+        synthetic_score = torch.norm(
+            synthetic_embedding
+            - reference_embedding
+        ).item()
 
         score_change = (
             synthetic_score
@@ -535,27 +740,25 @@ with torch.no_grad():
 
         relative_change = (
             score_change
-            / (clean_score + 1e-8)
+            /
+            (clean_score + 1e-8)
         )
 
+        paired_results.append({
 
-        # ----------------------------------------------------
-        # Save result
-        # ----------------------------------------------------
+            "synthetic_index":
+                i,
 
-        results.append({
-
-            "sample_id":
-                row["sample_id"],
-
-            "source_form":
-                row["source_form"],
-
-            "clean_form_id":
-                form_id,
+            "source_index":
+                source_index,
 
             "anomaly_type":
-                row["anomaly_type"],
+                str(
+                    paired_anomaly_types[i]
+                ),
+
+            "fold":
+                fold_number,
 
             "clean_score":
                 clean_score,
@@ -567,24 +770,54 @@ with torch.no_grad():
                 score_change,
 
             "relative_change":
-                relative_change,
-
+                relative_change
         })
 
 
-        if (index + 1) % 100 == 0:
+# ============================================================
+# RESULTS DATAFRAME
+# ============================================================
 
-            print(
-                f"Processed "
-                f"{index + 1}/{len(synthetic)}"
-            )
+results_df = pd.DataFrame(
+    paired_results
+)
+
+print(
+    "\nTotal paired evaluations:",
+    len(results_df)
+)
 
 
 # ============================================================
-# SAVE RESULTS
+# MERGE ORIGINAL CSV INFORMATION
 # ============================================================
 
-results_df = pd.DataFrame(results)
+if len(results_df) > 0:
+
+    results_df = results_df.merge(
+        synthetic[
+            [
+                "sample_id",
+                "source_form",
+                "clean_form_id",
+                "synthetic_image",
+                "ground_truth_mask"
+            ]
+        ],
+        left_on="synthetic_index",
+        right_index=True,
+        how="left"
+    )
+
+
+# ============================================================
+# SAVE
+# ============================================================
+
+OUTPUT_FILE.parent.mkdir(
+    parents=True,
+    exist_ok=True
+)
 
 results_df.to_csv(
     OUTPUT_FILE,
@@ -596,65 +829,87 @@ results_df.to_csv(
 # SUMMARY
 # ============================================================
 
-print("\n==========================================")
-print("PAIRED CLEAN VS SYNTHETIC RESULTS")
-print("==========================================")
+print()
+print("=" * 70)
+print("FINAL PAIRED RESULTS")
+print("=" * 70)
+
+if len(results_df) > 0:
+
+    print(
+        "\nMean score change by anomaly type:"
+    )
+
+    summary = (
+        results_df
+        .groupby(
+            "anomaly_type"
+        )[
+            "score_change"
+        ]
+        .agg(
+            [
+                "count",
+                "mean",
+                "std",
+                "min",
+                "max"
+            ]
+        )
+    )
+
+    print(summary)
+
+    print(
+        "\nMean relative change by anomaly type:"
+    )
+
+    relative_summary = (
+        results_df
+        .groupby(
+            "anomaly_type"
+        )[
+            "relative_change"
+        ]
+        .mean()
+    )
+
+    print(relative_summary)
+
+    print(
+        "\nOverall mean clean score:",
+        results_df[
+            "clean_score"
+        ].mean()
+    )
+
+    print(
+        "Overall mean synthetic score:",
+        results_df[
+            "synthetic_score"
+        ].mean()
+    )
+
+    print(
+        "Overall mean score change:",
+        results_df[
+            "score_change"
+        ].mean()
+    )
+
+else:
+
+    print(
+        "ERROR: No paired results were generated."
+    )
+
 
 print(
-    "Pairs:",
-    len(results_df)
+    "\nResults saved to:"
 )
-
-
-print("\nMean score change by anomaly type:")
-
-summary = (
-    results_df
-    .groupby("anomaly_type")["score_change"]
-    .agg([
-        "count",
-        "mean",
-        "std",
-        "min",
-        "max"
-    ])
-)
-
-print(summary)
-
-
-print(
-    "\nMean relative change by anomaly type:"
-)
-
-relative_summary = (
-    results_df
-    .groupby("anomaly_type")[
-        "relative_change"
-    ]
-    .mean()
-)
-
-print(relative_summary)
-
-
-print(
-    "\nOverall mean clean score:",
-    results_df["clean_score"].mean()
-)
-
-print(
-    "Overall mean synthetic score:",
-    results_df["synthetic_score"].mean()
-)
-
-print(
-    "Overall mean score change:",
-    results_df["score_change"].mean()
-)
-
-
-print("\nSaved to:")
 
 print(OUTPUT_FILE)
 
+print(
+    "\nEvaluation complete."
+)

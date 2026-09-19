@@ -1,10 +1,14 @@
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 from sklearn.model_selection import KFold
 from sklearn.neighbors import NearestNeighbors
-from sklearn.metrics import roc_auc_score, average_precision_score
+from sklearn.metrics import (
+    roc_auc_score,
+    average_precision_score
+)
 
 
 # ============================================================
@@ -29,27 +33,53 @@ OUTPUT_FILE = (
 
 
 # ============================================================
+# SETTINGS
+# ============================================================
+
+N_FOLDS = 5
+
+K_VALUES = [
+    1,
+    3,
+    5,
+    10,
+    20,
+    50
+]
+
+
+# ============================================================
 # LOAD EMBEDDINGS
 # ============================================================
 
-print("Loading embeddings...")
+print("=" * 65)
+print("LOADING PAIRED EMBEDDINGS")
+print("=" * 65)
 
 data = np.load(
     EMBEDDING_FILE,
     allow_pickle=True
 )
 
-clean_embeddings = data[
-    "clean_embeddings"
-]
+clean_embeddings = (
+    data["clean_embeddings"]
+    .astype(np.float32)
+)
 
-synthetic_embeddings = data[
-    "synthetic_embeddings"
-]
+synthetic_embeddings = (
+    data["synthetic_embeddings"]
+    .astype(np.float32)
+)
 
-synthetic_types = data[
-    "synthetic_types"
-]
+synthetic_types = (
+    data["synthetic_types"]
+)
+
+source_indices = (
+    data["source_indices"]
+    .astype(int)
+)
+
 
 print(
     "Clean embeddings:",
@@ -61,57 +91,136 @@ print(
     synthetic_embeddings.shape
 )
 
+print(
+    "Synthetic samples:",
+    len(synthetic_embeddings)
+)
+
+print(
+    "Unique synthetic source forms:",
+    len(np.unique(source_indices))
+)
+
 
 # ============================================================
-# 5-FOLD CROSS VALIDATION
+# VERIFY
+# ============================================================
+
+assert len(synthetic_embeddings) == len(
+    synthetic_types
+)
+
+assert len(synthetic_embeddings) == len(
+    source_indices
+)
+
+assert np.all(
+    source_indices >= 0
+)
+
+assert np.all(
+    source_indices < len(clean_embeddings)
+)
+
+print(
+    "\nEmbedding data verified."
+)
+
+
+# ============================================================
+# K-FOLD
 # ============================================================
 
 kf = KFold(
-    n_splits=5,
+    n_splits=N_FOLDS,
     shuffle=True,
     random_state=42
 )
 
-k_values = [
-    1,
-    3,
-    5,
-    10,
-    20,
-    50
-]
+
+# ============================================================
+# STORAGE
+# ============================================================
 
 all_results = []
 
 
-for k in k_values:
+# ============================================================
+# TEST EACH K
+# ============================================================
 
-    print("\n" + "=" * 60)
-    print(f"Testing k = {k}")
-    print("=" * 60)
+for k in K_VALUES:
 
-    clean_scores = np.zeros(
-        len(clean_embeddings)
-    )
+    print("\n")
+    print("=" * 65)
+    print(f"TESTING k = {k}")
+    print("=" * 65)
 
-    # --------------------------------------------------------
-    # OUT-OF-FOLD CLEAN SCORES
-    # --------------------------------------------------------
 
-    for fold, (train_idx, val_idx) in enumerate(
+    fold_clean_scores = []
+
+    fold_synthetic_scores = []
+
+
+    # ========================================================
+    # 5 FOLDS
+    # ========================================================
+
+    for fold, (
+        train_idx,
+        test_idx
+    ) in enumerate(
         kf.split(clean_embeddings),
         start=1
     ):
 
         train_embeddings = (
-            clean_embeddings[train_idx]
+            clean_embeddings[
+                train_idx
+            ]
         )
 
-        val_embeddings = (
-            clean_embeddings[val_idx]
+        test_clean_embeddings = (
+            clean_embeddings[
+                test_idx
+            ]
         )
 
-        # Need at least k neighbors
+
+        # ----------------------------------------------------
+        # Synthetic samples whose source form
+        # belongs to the held-out fold
+        # ----------------------------------------------------
+
+        synthetic_mask = np.isin(
+            source_indices,
+            test_idx
+        )
+
+        synthetic_idx = np.where(
+            synthetic_mask
+        )[0]
+
+        test_synthetic_embeddings = (
+            synthetic_embeddings[
+                synthetic_idx
+            ]
+        )
+
+
+        print(
+            f"Fold {fold}/{N_FOLDS}: "
+            f"train clean = {len(train_embeddings)}, "
+            f"test clean = {len(test_clean_embeddings)}, "
+            f"test synthetic = "
+            f"{len(test_synthetic_embeddings)}"
+        )
+
+
+        # ----------------------------------------------------
+        # k-NN
+        # ----------------------------------------------------
+
         knn = NearestNeighbors(
             n_neighbors=k,
             metric="euclidean"
@@ -121,65 +230,84 @@ for k in k_values:
             train_embeddings
         )
 
-        distances, _ = knn.kneighbors(
-            val_embeddings
+
+        # ----------------------------------------------------
+        # Clean validation scores
+        # ----------------------------------------------------
+
+        clean_distances, _ = (
+            knn.kneighbors(
+                test_clean_embeddings
+            )
         )
 
-        # Mean distance to k nearest NORMAL samples
-        scores = distances.mean(
-            axis=1
-        )
-
-        clean_scores[val_idx] = scores
-
-        print(
-            f"Fold {fold}/5 completed"
+        clean_scores = (
+            clean_distances[:, -1]
         )
 
 
-    # --------------------------------------------------------
-    # SYNTHETIC SCORES
-    # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Synthetic validation scores
+        # ----------------------------------------------------
 
-    # Train on ALL clean samples
-    knn = NearestNeighbors(
-        n_neighbors=k,
-        metric="euclidean"
-    )
-
-    knn.fit(
-        clean_embeddings
-    )
-
-    synthetic_distances, _ = knn.kneighbors(
-        synthetic_embeddings
-    )
-
-    synthetic_scores = (
-        synthetic_distances.mean(
-            axis=1
+        synthetic_distances, _ = (
+            knn.kneighbors(
+                test_synthetic_embeddings
+            )
         )
+
+        synthetic_scores = (
+            synthetic_distances[:, -1]
+        )
+
+
+        fold_clean_scores.extend(
+            clean_scores
+        )
+
+        fold_synthetic_scores.extend(
+            synthetic_scores
+        )
+
+
+    # ========================================================
+    # COMBINE ALL HELD-OUT RESULTS
+    # ========================================================
+
+    clean_scores = np.asarray(
+        fold_clean_scores
     )
 
+    synthetic_scores = np.asarray(
+        fold_synthetic_scores
+    )
 
-    # --------------------------------------------------------
-    # COMBINE
-    # --------------------------------------------------------
 
     y_true = np.concatenate([
-        np.zeros(len(clean_scores)),
-        np.ones(len(synthetic_scores))
+
+        np.zeros(
+            len(clean_scores),
+            dtype=int
+        ),
+
+        np.ones(
+            len(synthetic_scores),
+            dtype=int
+        )
     ])
 
+
     scores = np.concatenate([
+
         clean_scores,
+
         synthetic_scores
     ])
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # METRICS
-    # --------------------------------------------------------
+    # ========================================================
 
     auc = roc_auc_score(
         y_true,
@@ -193,7 +321,7 @@ for k in k_values:
 
 
     print(
-        f"ROC-AUC: {auc:.4f}"
+        f"\nROC-AUC: {auc:.4f}"
     )
 
     print(
@@ -202,9 +330,21 @@ for k in k_values:
 
 
     all_results.append({
-        "k": k,
-        "roc_auc": auc,
-        "average_precision": ap
+
+        "k":
+            k,
+
+        "roc_auc":
+            auc,
+
+        "average_precision":
+            ap,
+
+        "mean_clean_score":
+            clean_scores.mean(),
+
+        "mean_synthetic_score":
+            synthetic_scores.mean()
     })
 
 
@@ -221,16 +361,25 @@ results_df = results_df.sort_values(
     ascending=False
 )
 
+
+# ============================================================
+# SAVE
+# ============================================================
+
 results_df.to_csv(
     OUTPUT_FILE,
     index=False
 )
 
 
+# ============================================================
+# DISPLAY
+# ============================================================
+
 print("\n")
-print("=" * 60)
+print("=" * 65)
 print("5-FOLD CROSS-VALIDATED k-NN RESULTS")
-print("=" * 60)
+print("=" * 65)
 
 print(
     results_df.to_string(
@@ -245,17 +394,19 @@ print(
 
 best = results_df.iloc[0]
 
+
 print("\n")
-print("=" * 60)
+print("=" * 65)
 print("BEST VALIDATED k")
-print("=" * 60)
+print("=" * 65)
 
 print(
     f"k = {int(best['k'])}"
 )
 
 print(
-    f"ROC-AUC = {best['roc_auc']:.4f}"
+    f"ROC-AUC = "
+    f"{best['roc_auc']:.4f}"
 )
 
 print(
@@ -263,8 +414,15 @@ print(
     f"{best['average_precision']:.4f}"
 )
 
+
+# ============================================================
+# OUTPUT
+# ============================================================
+
 print("\nSaved to:")
 
 print(
     OUTPUT_FILE
 )
+
+print("\nDone.")

@@ -10,17 +10,28 @@ from sklearn.model_selection import KFold
 # PATHS
 # ============================================================
 
-INPUT_FILE = "../data/synthetic_form_anomalies/paired_embeddings.npz"
+INPUT_FILE = (
+    "../data/synthetic_form_anomalies/paired_embeddings.npz"
+)
 
-ROC_OUTPUT = "../data/synthetic_form_anomalies/roc_curves_actual.png"
-DIST_OUTPUT = "../data/synthetic_form_anomalies/clean_vs_synthetic_distribution.png"
+ROC_OUTPUT = (
+    "../data/synthetic_form_anomalies/roc_curves_actual.png"
+)
+
+DIST_OUTPUT = (
+    "../data/synthetic_form_anomalies/"
+    "clean_vs_synthetic_distribution.png"
+)
 
 
 # ============================================================
 # SETTINGS
 # ============================================================
 
-K = 1
+# Final proposed method:
+# distance to the 5th nearest clean neighbour
+K = 5
+
 N_SPLITS = 5
 RANDOM_STATE = 42
 
@@ -40,8 +51,20 @@ syn_types = data["synthetic_types"]
 source_indices = data["source_indices"]
 
 
-print("Clean embeddings:", clean_emb.shape)
-print("Synthetic embeddings:", syn_emb.shape)
+print(
+    "Clean embeddings:",
+    clean_emb.shape
+)
+
+print(
+    "Synthetic embeddings:",
+    syn_emb.shape
+)
+
+print(
+    "Source indices:",
+    source_indices.shape
+)
 
 
 # ============================================================
@@ -51,7 +74,16 @@ print("Synthetic embeddings:", syn_emb.shape)
 if len(syn_emb) != len(source_indices):
 
     raise ValueError(
-        "Synthetic embeddings and source indices have different lengths."
+        "Synthetic embeddings and source indices "
+        "have different lengths."
+    )
+
+
+if len(syn_emb) != len(syn_types):
+
+    raise ValueError(
+        "Synthetic embeddings and anomaly types "
+        "have different lengths."
     )
 
 
@@ -65,14 +97,14 @@ if np.any(source_indices < 0) or np.any(
 
 
 # ============================================================
-# 3. PAIRED 5-FOLD CROSS-VALIDATED 1-NN SCORES
+# 3. PAIRED 5-FOLD CROSS-VALIDATED 5-NN SCORES
 # ============================================================
 #
 # For every fold:
 #
 # TRAINING CLEAN
 #       ↓
-#   1-NN reference
+# 5-NN reference
 #
 # VALIDATION CLEAN
 #       ↓
@@ -82,8 +114,11 @@ if np.any(source_indices < 0) or np.any(
 #       ↓
 # synthetic anomaly scores
 #
-# This is the same evaluation procedure used by
-# evaluate_anomaly_types.py.
+# Anomaly score =
+# distance to the 5th nearest clean neighbour.
+#
+# The source clean sample of a synthetic image is never
+# included in the reference set for that synthetic image.
 #
 # ============================================================
 
@@ -105,13 +140,24 @@ synthetic_scores = np.zeros(
 )
 
 
+clean_evaluated = np.zeros(
+    len(clean_emb),
+    dtype=bool
+)
+
+synthetic_evaluated = np.zeros(
+    len(syn_emb),
+    dtype=bool
+)
+
+
 for fold, (train_idx, val_idx) in enumerate(
     kf.split(clean_emb),
     start=1
 ):
 
     print(
-        f"Fold {fold}/{N_SPLITS} completed"
+        f"Fold {fold}/{N_SPLITS}"
     )
 
 
@@ -123,6 +169,10 @@ for fold, (train_idx, val_idx) in enumerate(
         train_idx
     ]
 
+
+    # --------------------------------------------------------
+    # Fit 5-NN model
+    # --------------------------------------------------------
 
     nn_model = NearestNeighbors(
         n_neighbors=K,
@@ -146,9 +196,15 @@ for fold, (train_idx, val_idx) in enumerate(
         val_clean_emb
     )
 
+
+    # IMPORTANT:
+    # Use distance to the K-th nearest neighbour,
+    # not the mean distance.
     clean_scores[val_idx] = (
-        clean_distances.mean(axis=1)
+        clean_distances[:, -1]
     )
+
+    clean_evaluated[val_idx] = True
 
 
     # --------------------------------------------------------
@@ -171,9 +227,20 @@ for fold, (train_idx, val_idx) in enumerate(
     )
 
 
+    print(
+        f"  Clean validation samples: "
+        f"{len(val_idx)}"
+    )
+
+    print(
+        f"  Synthetic paired samples: "
+        f"{len(synthetic_fold_idx)}"
+    )
+
+
     # --------------------------------------------------------
-    # Score those synthetic samples using the SAME
-    # reference set.
+    # Score corresponding synthetic samples using the SAME
+    # clean reference set.
     # --------------------------------------------------------
 
     if len(synthetic_fold_idx) > 0:
@@ -186,26 +253,87 @@ for fold, (train_idx, val_idx) in enumerate(
             val_syn_emb
         )
 
+
+        # IMPORTANT:
+        # Use distance to the K-th nearest neighbour.
         synthetic_scores[
             synthetic_fold_idx
-        ] = syn_distances.mean(axis=1)
+        ] = syn_distances[:, -1]
 
 
-print("All paired scores calculated.")
+        synthetic_evaluated[
+            synthetic_fold_idx
+        ] = True
 
 
 # ============================================================
-# 4. OVERALL ROC-AUC + AP
+# 4. VALIDATION CHECK
 # ============================================================
+
+if not np.all(clean_evaluated):
+
+    missing = np.sum(
+        ~clean_evaluated
+    )
+
+    raise RuntimeError(
+        f"{missing} clean samples were not evaluated."
+    )
+
+
+if not np.all(synthetic_evaluated):
+
+    missing = np.sum(
+        ~synthetic_evaluated
+    )
+
+    raise RuntimeError(
+        f"{missing} synthetic samples were not evaluated."
+    )
+
+
+print()
+print(
+    "All paired scores calculated."
+)
+
+
+# ============================================================
+# 5. OVERALL PAIRED ROC-AUC + AP
+# ============================================================
+#
+# Each synthetic sample is compared against the anomaly
+# score of its corresponding clean source sample.
+#
+# This is the same paired protocol used by
+# evaluate_anomaly_types.py.
+#
+# ============================================================
+
+paired_clean_scores = (
+    clean_scores[
+        source_indices
+    ]
+)
+
+paired_synthetic_scores = (
+    synthetic_scores
+)
+
 
 y_true = np.concatenate([
-    np.zeros(len(clean_scores)),
-    np.ones(len(synthetic_scores))
+    np.zeros(
+        len(paired_clean_scores)
+    ),
+    np.ones(
+        len(paired_synthetic_scores)
+    )
 ])
 
+
 all_scores = np.concatenate([
-    clean_scores,
-    synthetic_scores
+    paired_clean_scores,
+    paired_synthetic_scores
 ])
 
 
@@ -214,10 +342,12 @@ fpr, tpr, _ = roc_curve(
     all_scores
 )
 
+
 overall_auc = auc(
     fpr,
     tpr
 )
+
 
 ap_score = average_precision_score(
     y_true,
@@ -227,7 +357,7 @@ ap_score = average_precision_score(
 
 print()
 print("========================================")
-print("OVERALL RESULTS")
+print("OVERALL PAIRED RESULTS")
 print("========================================")
 
 print(
@@ -240,7 +370,7 @@ print(
 
 
 # ============================================================
-# 5. PER-ANOMALY RESULTS
+# 6. PER-ANOMALY RESULTS
 # ============================================================
 
 print()
@@ -252,34 +382,42 @@ print("========================================")
 type_results = {}
 
 
-for anomaly_type in np.unique(
-    syn_types
+for anomaly_type in sorted(
+    np.unique(syn_types)
 ):
 
     mask = (
         syn_types == anomaly_type
     )
 
+
+    # Synthetic scores for this anomaly type
     type_syn_scores = (
         synthetic_scores[mask]
     )
 
+
+    # Source clean indices corresponding to
+    # these synthetic anomalies
     type_source_indices = (
         source_indices[mask]
     )
 
 
-    # --------------------------------------------------------
-    # Compare each synthetic anomaly with its corresponding
-    # clean source sample.
-    # --------------------------------------------------------
-
+    # Corresponding clean scores
     type_clean_scores = (
         clean_scores[
             type_source_indices
         ]
     )
 
+
+    # --------------------------------------------------------
+    # Labels
+    #
+    # 0 = clean
+    # 1 = synthetic anomaly
+    # --------------------------------------------------------
 
     y_type = np.concatenate([
         np.zeros(
@@ -297,6 +435,10 @@ for anomaly_type in np.unique(
     ])
 
 
+    # --------------------------------------------------------
+    # ROC
+    # --------------------------------------------------------
+
     fpr_type, tpr_type, _ = roc_curve(
         y_type,
         scores_type
@@ -312,9 +454,15 @@ for anomaly_type in np.unique(
     type_results[
         str(anomaly_type)
     ] = {
-        "fpr": fpr_type,
-        "tpr": tpr_type,
-        "auc": auc_type
+
+        "fpr":
+            fpr_type,
+
+        "tpr":
+            tpr_type,
+
+        "auc":
+            auc_type
     }
 
 
@@ -326,7 +474,7 @@ for anomaly_type in np.unique(
 
 
 # ============================================================
-# 6. ROC CURVES
+# 7. ROC CURVES
 # ============================================================
 
 plt.figure(
@@ -334,20 +482,24 @@ plt.figure(
 )
 
 
-# Overall curve
+# ------------------------------------------------------------
+# Overall ROC curve
+# ------------------------------------------------------------
 
 plt.plot(
     fpr,
     tpr,
     linewidth=2.5,
     label=(
-        f"Overall 1-NN "
+        f"Overall 5-NN "
         f"(AUC = {overall_auc:.4f})"
     )
 )
 
 
+# ------------------------------------------------------------
 # Individual anomaly curves
+# ------------------------------------------------------------
 
 for anomaly_type, result in (
     type_results.items()
@@ -364,7 +516,9 @@ for anomaly_type, result in (
     )
 
 
+# ------------------------------------------------------------
 # Random baseline
+# ------------------------------------------------------------
 
 plt.plot(
     [0, 1],
@@ -407,7 +561,14 @@ plt.close()
 
 
 # ============================================================
-# 7. SCORE DISTRIBUTION
+# 8. SCORE DISTRIBUTION
+# ============================================================
+#
+# For the distribution plot, use the complete clean score
+# distribution and synthetic score distribution.
+#
+# This visualizes how the anomaly scores are distributed.
+#
 # ============================================================
 
 plt.figure(
@@ -434,7 +595,8 @@ plt.hist(
 
 
 plt.xlabel(
-    "1-Nearest Neighbor Euclidean Distance"
+    "5-NN Anomaly Score "
+    "(Distance to 5th Nearest Clean Neighbour)"
 )
 
 plt.ylabel(
@@ -465,7 +627,7 @@ plt.close()
 
 
 # ============================================================
-# 8. SUMMARY
+# 9. SUMMARY
 # ============================================================
 
 print()

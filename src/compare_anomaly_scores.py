@@ -1,11 +1,18 @@
 from pathlib import Path
+
 import cv2
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+
 from torchvision.models import resnet50, ResNet50_Weights
-from sklearn.metrics import roc_auc_score, average_precision_score
+
+from sklearn.metrics import (
+    roc_auc_score,
+    average_precision_score
+)
+
 from sklearn.neighbors import NearestNeighbors
 
 
@@ -15,9 +22,17 @@ from sklearn.neighbors import NearestNeighbors
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-FEATURE_FILE = PROJECT_ROOT / "data" / "metadata" / "resnet_features.pt"
-CHECKPOINT_FILE = PROJECT_ROOT / "best_dysgraphia_encoder.pth"
-METADATA_FILE = PROJECT_ROOT / "data" / "metadata" / "metadata_all.csv"
+FEATURE_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "metadata"
+    / "resnet_features.pt"
+)
+
+CHECKPOINT_FILE = (
+    PROJECT_ROOT
+    / "best_dysgraphia_encoder.pth"
+)
 
 SYNTHETIC_CSV = (
     PROJECT_ROOT
@@ -37,50 +52,79 @@ DEVICE = torch.device("cpu")
 
 
 # ============================================================
-# FORM ID FIX
-# ============================================================
-
-FORM_ID_MAP = {
-    "a05-094(1)": "a05-094",
-    "b06-075(1)": "b06-075",
-    "g06-037b(1)": "g06-037b",
-}
-
-
-# ============================================================
 # CACHED FUSION MODEL
 # ============================================================
 
 class OpenCVEncoder(nn.Module):
-    def __init__(self, input_dim=9, output_dim=64):
+
+    def __init__(
+        self,
+        input_dim=9,
+        output_dim=64
+    ):
+
         super().__init__()
 
         self.network = nn.Sequential(
-            nn.Linear(input_dim, 32),
+
+            nn.Linear(
+                input_dim,
+                32
+            ),
+
             nn.ReLU(),
+
             nn.LayerNorm(32),
-            nn.Linear(32, output_dim),
+
+            nn.Linear(
+                32,
+                output_dim
+            ),
+
             nn.ReLU(),
+
             nn.Dropout(0.2)
         )
 
     def forward(self, x):
+
         return self.network(x)
 
 
 class FeatureAttention(nn.Module):
-    def __init__(self, input_dim=2112, embedding_dim=256):
+
+    def __init__(
+        self,
+        input_dim=2112,
+        embedding_dim=256
+    ):
+
         super().__init__()
 
         self.attention = nn.Sequential(
-            nn.Linear(input_dim, 512),
+
+            nn.Linear(
+                input_dim,
+                512
+            ),
+
             nn.ReLU(),
-            nn.Linear(512, input_dim)
+
+            nn.Linear(
+                512,
+                input_dim
+            )
         )
 
         self.projection = nn.Sequential(
-            nn.Linear(input_dim, embedding_dim),
+
+            nn.Linear(
+                input_dim,
+                embedding_dim
+            ),
+
             nn.ReLU(),
+
             nn.Dropout(0.2)
         )
 
@@ -93,7 +137,9 @@ class FeatureAttention(nn.Module):
             dim=1
         )
 
-        attended_features = x * attention_weights
+        attended_features = (
+            x * attention_weights
+        )
 
         embedding = self.projection(
             attended_features
@@ -119,38 +165,71 @@ class CachedFusionModel(nn.Module):
         )
 
         self.projection_head = nn.Sequential(
-            nn.Linear(256, 128),
+
+            nn.Linear(
+                256,
+                128
+            ),
+
             nn.ReLU(),
-            nn.Linear(128, 64)
+
+            nn.Linear(
+                128,
+                64
+            )
         )
 
         self.opencv_reconstruction = nn.Sequential(
-            nn.Linear(256, 64),
+
+            nn.Linear(
+                256,
+                64
+            ),
+
             nn.ReLU(),
-            nn.Linear(64, 9)
+
+            nn.Linear(
+                64,
+                9
+            )
         )
 
-    def forward(self, image_features, opencv_features):
+    def forward(
+        self,
+        image_features,
+        opencv_features
+    ):
 
-        encoded_opencv = self.opencv_encoder(
-            opencv_features
+        encoded_opencv = (
+            self.opencv_encoder(
+                opencv_features
+            )
         )
 
         fused = torch.cat(
-            [image_features, encoded_opencv],
+            [
+                image_features,
+                encoded_opencv
+            ],
             dim=1
         )
 
-        embedding, attention = self.attention(
-            fused
+        embedding, attention = (
+            self.attention(
+                fused
+            )
         )
 
-        projection = self.projection_head(
-            embedding
+        projection = (
+            self.projection_head(
+                embedding
+            )
         )
 
-        reconstruction = self.opencv_reconstruction(
-            embedding
+        reconstruction = (
+            self.opencv_reconstruction(
+                embedding
+            )
         )
 
         return {
@@ -162,78 +241,12 @@ class CachedFusionModel(nn.Module):
 
 
 # ============================================================
-# IMAGE PREPROCESSING
+# LOAD CACHED FEATURES
 # ============================================================
 
-def load_image(image_path):
-
-    image = cv2.imread(
-        str(image_path),
-        cv2.IMREAD_GRAYSCALE
-    )
-
-    if image is None:
-        raise RuntimeError(
-            f"Could not read image: {image_path}"
-        )
-
-    image = cv2.resize(
-        image,
-        (224, 224)
-    )
-
-    image = cv2.cvtColor(
-        image,
-        cv2.COLOR_GRAY2RGB
-    )
-
-    image = torch.from_numpy(
-        image
-    ).float() / 255.0
-
-    image = image.permute(
-        2, 0, 1
-    )
-
-    return image
-
-
-# ============================================================
-# RESNET FEATURE EXTRACTION
-# ============================================================
-
-def extract_resnet_feature(model, image_path):
-
-    image = load_image(
-        image_path
-    ).unsqueeze(0)
-
-    mean = torch.tensor(
-        [0.485, 0.456, 0.406]
-    ).view(1, 3, 1, 1)
-
-    std = torch.tensor(
-        [0.229, 0.224, 0.225]
-    ).view(1, 3, 1, 1)
-
-    image = (
-        image - mean
-    ) / std
-
-    with torch.no_grad():
-
-        feature = model(
-            image
-        )
-
-    return feature.squeeze(0)
-
-
-# ============================================================
-# LOAD DATA
-# ============================================================
-
-print("Loading cached features...")
+print("=" * 65)
+print("LOADING CACHED FEATURES")
+print("=" * 65)
 
 cached = torch.load(
     FEATURE_FILE,
@@ -241,21 +254,17 @@ cached = torch.load(
     weights_only=False
 )
 
-cached_image_features = cached[
-    "image_features"
-].float()
+cached_image_features = (
+    cached["image_features"].float()
+)
 
-cached_opencv_features = cached[
-    "opencv_features"
-].float()
-
-sample_ids = cached[
-    "sample_ids"
-]
+cached_opencv_features = (
+    cached["opencv_features"].float()
+)
 
 sample_ids = [
     str(x)
-    for x in sample_ids
+    for x in cached["sample_ids"]
 ]
 
 print(
@@ -263,22 +272,10 @@ print(
     cached_image_features.shape
 )
 
-
-print("\nLoading metadata...")
-
-metadata = pd.read_csv(
-    METADATA_FILE
+print(
+    "Cached OpenCV features:",
+    cached_opencv_features.shape
 )
-
-metadata["sample_id"] = (
-    metadata["sample_id"]
-    .astype(str)
-)
-
-metadata_index = {
-    row["sample_id"]: row
-    for _, row in metadata.iterrows()
-}
 
 
 # ============================================================
@@ -293,13 +290,15 @@ checkpoint = torch.load(
     weights_only=False
 )
 
-feature_mean = checkpoint[
-    "feature_mean"
-].float()
+feature_mean = (
+    checkpoint["feature_mean"]
+    .float()
+)
 
-feature_std = checkpoint[
-    "feature_std"
-].float()
+feature_std = (
+    checkpoint["feature_std"]
+    .float()
+)
 
 
 fusion_model = CachedFusionModel()
@@ -310,6 +309,7 @@ fusion_model.load_state_dict(
 )
 
 fusion_model.to(DEVICE)
+
 fusion_model.eval()
 
 print("Fusion model loaded.")
@@ -322,24 +322,34 @@ print("Fusion model loaded.")
 print("\nCalculating clean embeddings...")
 
 normalized_clean_opencv = (
+
     cached_opencv_features
     - feature_mean
+
 ) / (
-    feature_std + 1e-8
+
+    feature_std
+    + 1e-8
 )
+
 
 with torch.no_grad():
 
     clean_output = fusion_model(
+
         cached_image_features,
+
         normalized_clean_opencv
     )
 
+
 clean_embeddings = (
+
     clean_output["embedding"]
     .cpu()
     .numpy()
 )
+
 
 print(
     "Clean embeddings:",
@@ -348,8 +358,10 @@ print(
 
 
 # ============================================================
-# REFERENCE EMBEDDING
+# GLOBAL CLEAN REFERENCE
 # ============================================================
+
+print("\nBuilding full clean reference...")
 
 reference_embedding = (
     clean_embeddings.mean(axis=0)
@@ -357,23 +369,22 @@ reference_embedding = (
 
 
 # ============================================================
-# MAHALANOBIS MODEL
+# MAHALANOBIS
 # ============================================================
 
-print("\nBuilding Mahalanobis model...")
+print("Building Mahalanobis model...")
 
 covariance = np.cov(
     clean_embeddings,
     rowvar=False
 )
 
-# Regularization for numerical stability
-regularization = (
-    np.eye(covariance.shape[0])
+covariance += (
+    np.eye(
+        covariance.shape[0]
+    )
     * 1e-3
 )
-
-covariance += regularization
 
 covariance_inverse = np.linalg.pinv(
     covariance
@@ -381,66 +392,21 @@ covariance_inverse = np.linalg.pinv(
 
 
 # ============================================================
-# KNN MODEL
+# KNN
 # ============================================================
 
 print("Building k-NN model...")
 
+KNN_K = 5
+
 knn = NearestNeighbors(
-    n_neighbors=6,
+    n_neighbors=KNN_K,
     metric="euclidean"
 )
 
 knn.fit(
     clean_embeddings
 )
-
-
-# ============================================================
-# RESNET
-# ============================================================
-
-print("\nLoading pretrained ResNet50...")
-
-resnet = resnet50(
-    weights=ResNet50_Weights.DEFAULT
-)
-
-resnet.fc = nn.Identity()
-
-resnet.to(DEVICE)
-resnet.eval()
-
-print("ResNet50 loaded.")
-
-
-# ============================================================
-# SYNTHETIC DATA
-# ============================================================
-
-synthetic = pd.read_csv(
-    SYNTHETIC_CSV
-)
-
-print(
-    "\nSynthetic anomalies:",
-    len(synthetic)
-)
-
-
-# ============================================================
-# MAP CLEAN FORM
-# ============================================================
-
-clean_embedding_by_id = {
-    sample_ids[i]: clean_embeddings[i]
-    for i in range(len(sample_ids))
-}
-
-clean_opencv_by_id = {
-    sample_ids[i]: cached_opencv_features[i]
-    for i in range(len(sample_ids))
-}
 
 
 # ============================================================
@@ -462,8 +428,11 @@ def cosine_score(x):
     )
 
     denominator = (
+
         np.linalg.norm(x)
-        * np.linalg.norm(reference_embedding)
+        * np.linalg.norm(
+            reference_embedding
+        )
         + 1e-8
     )
 
@@ -481,6 +450,7 @@ def mahalanobis_score(x):
     )
 
     return np.sqrt(
+
         difference
         @ covariance_inverse
         @ difference.T
@@ -488,20 +458,148 @@ def mahalanobis_score(x):
 
 
 # ============================================================
-# PROCESS SYNTHETIC DATA
+# LOAD SYNTHETIC DATA
+# ============================================================
+
+synthetic = pd.read_csv(
+    SYNTHETIC_CSV
+)
+
+print(
+    "\nSynthetic anomalies:",
+    len(synthetic)
+)
+
+
+# ============================================================
+# CLEAN EMBEDDING LOOKUP
+# ============================================================
+
+clean_embedding_by_id = {
+
+    sample_ids[i]:
+        clean_embeddings[i]
+
+    for i in range(
+        len(sample_ids)
+    )
+}
+
+
+# ============================================================
+# RESNET
+# ============================================================
+
+print("\nLoading pretrained ResNet50...")
+
+resnet = resnet50(
+    weights=ResNet50_Weights.DEFAULT
+)
+
+resnet.fc = nn.Identity()
+
+resnet.to(DEVICE)
+
+resnet.eval()
+
+print("ResNet50 loaded.")
+
+
+# ============================================================
+# IMAGE LOADING
+# ============================================================
+
+def load_image(image_path):
+
+    image = cv2.imread(
+        str(image_path),
+        cv2.IMREAD_GRAYSCALE
+    )
+
+    if image is None:
+
+        raise RuntimeError(
+            f"Could not read image: {image_path}"
+        )
+
+    image = cv2.resize(
+        image,
+        (224, 224)
+    )
+
+    image = cv2.cvtColor(
+        image,
+        cv2.COLOR_GRAY2RGB
+    )
+
+    image = (
+        torch.from_numpy(
+            image
+        )
+        .float()
+        / 255.0
+    )
+
+    image = image.permute(
+        2,
+        0,
+        1
+    )
+
+    return image
+
+
+def extract_resnet_feature(
+    image_path
+):
+
+    image = load_image(
+        image_path
+    ).unsqueeze(0)
+
+    mean = torch.tensor(
+        [0.485, 0.456, 0.406]
+    ).view(
+        1,
+        3,
+        1,
+        1
+    )
+
+    std = torch.tensor(
+        [0.229, 0.224, 0.225]
+    ).view(
+        1,
+        3,
+        1,
+        1
+    )
+
+    image = (
+        image - mean
+    ) / std
+
+    with torch.no_grad():
+
+        feature = resnet(
+            image
+        )
+
+    return feature.squeeze(0)
+
+
+# ============================================================
+# PROCESS SYNTHETIC FORMS
 # ============================================================
 
 results = []
+
+print("\nProcessing synthetic forms...")
 
 for index, row in synthetic.iterrows():
 
     source_form = str(
         row["source_form"]
-    )
-
-    source_form = FORM_ID_MAP.get(
-        source_form,
-        source_form
     )
 
     image_path = (
@@ -512,6 +610,7 @@ for index, row in synthetic.iterrows():
     if not image_path.exists():
 
         image_path = (
+
             PROJECT_ROOT
             / "data"
             / "synthetic_form_anomalies"
@@ -521,42 +620,78 @@ for index, row in synthetic.iterrows():
             ).name
         )
 
-    if source_form not in clean_opencv_by_id:
+    if source_form not in (
+        clean_embedding_by_id
+    ):
+
+        print(
+            "Skipping:",
+            source_form
+        )
 
         continue
+
 
     # --------------------------------------------------------
     # ResNet feature
     # --------------------------------------------------------
 
-    resnet_feature = extract_resnet_feature(
-        resnet,
-        image_path
+    resnet_feature = (
+        extract_resnet_feature(
+            image_path
+        )
     )
 
     resnet_feature = (
         resnet_feature
         .unsqueeze(0)
-        .to(DEVICE)
     )
 
+
     # --------------------------------------------------------
-    # Original clean OpenCV features
+    # ORIGINAL CLEAN EMBEDDING
     # --------------------------------------------------------
 
-    opencv_feature = (
-        clean_opencv_by_id[
+    # IMPORTANT:
+    # The handcrafted OpenCV features remain
+    # unchanged so that this experiment measures
+    # the effect of the synthetic image modification
+    # through the image branch.
+
+    clean_embedding = (
+        clean_embedding_by_id[
             source_form
+        ]
+    )
+
+
+    # --------------------------------------------------------
+    # Obtain original OpenCV features
+    # --------------------------------------------------------
+
+    clean_index = sample_ids.index(
+        source_form
+    )
+
+    opencv_feature = (
+        cached_opencv_features[
+            clean_index
         ]
         .unsqueeze(0)
     )
 
+
     normalized_opencv = (
+
         opencv_feature
         - feature_mean
+
     ) / (
-        feature_std + 1e-8
+
+        feature_std
+        + 1e-8
     )
+
 
     # --------------------------------------------------------
     # Synthetic embedding
@@ -565,16 +700,21 @@ for index, row in synthetic.iterrows():
     with torch.no_grad():
 
         output = fusion_model(
+
             resnet_feature,
+
             normalized_opencv
         )
 
+
     synthetic_embedding = (
+
         output["embedding"]
         .squeeze(0)
         .cpu()
         .numpy()
     )
+
 
     # --------------------------------------------------------
     # Scores
@@ -592,36 +732,56 @@ for index, row in synthetic.iterrows():
         synthetic_embedding
     )
 
-    # kNN
-    distances, _ = knn.kneighbors(
-        synthetic_embedding.reshape(1, -1)
+    distances, _ = (
+        knn.kneighbors(
+            synthetic_embedding.reshape(
+                1,
+                -1
+            )
+        )
     )
 
-    knn_score = distances[0, -1]
+    knn_score = distances[
+        0,
+        -1
+    ]
+
 
     results.append({
 
-        "source_form": source_form,
+        "source_form":
+            source_form,
 
-        "anomaly_type": row[
-            "anomaly_type"
-        ],
+        "anomaly_type":
+            row["anomaly_type"],
 
-        "label": 1,
+        "label":
+            1,
 
-        "euclidean_score": euclidean,
+        "euclidean_score":
+            euclidean,
 
-        "cosine_score": cosine,
+        "cosine_score":
+            cosine,
 
-        "mahalanobis_score": mahalanobis,
+        "mahalanobis_score":
+            mahalanobis,
 
-        "knn_score": knn_score
+        "knn_score":
+            knn_score
     })
 
-    if (index + 1) % 100 == 0:
+
+    if (
+        (index + 1)
+        % 100
+        == 0
+    ):
 
         print(
-            f"Processed {index + 1}/{len(synthetic)}"
+            f"Processed "
+            f"{index + 1}/"
+            f"{len(synthetic)}"
         )
 
 
@@ -645,32 +805,47 @@ for embedding in clean_embeddings:
         embedding
     )
 
-    distances, _ = knn.kneighbors(
-        embedding.reshape(1, -1)
+    distances, _ = (
+        knn.kneighbors(
+            embedding.reshape(
+                1,
+                -1
+            )
+        )
     )
 
-    knn_score = distances[0, -1]
+    knn_score = distances[
+        0,
+        -1
+    ]
 
     results.append({
 
-        "source_form": "clean",
+        "source_form":
+            "clean",
 
-        "anomaly_type": "clean",
+        "anomaly_type":
+            "clean",
 
-        "label": 0,
+        "label":
+            0,
 
-        "euclidean_score": euclidean,
+        "euclidean_score":
+            euclidean,
 
-        "cosine_score": cosine,
+        "cosine_score":
+            cosine,
 
-        "mahalanobis_score": mahalanobis,
+        "mahalanobis_score":
+            mahalanobis,
 
-        "knn_score": knn_score
+        "knn_score":
+            knn_score
     })
 
 
 # ============================================================
-# RESULTS
+# SAVE RESULTS
 # ============================================================
 
 results_df = pd.DataFrame(
@@ -687,27 +862,35 @@ results_df.to_csv(
 # METRICS
 # ============================================================
 
-y_true = results_df[
-    "label"
-].values
+y_true = (
+    results_df["label"]
+    .values
+)
 
 methods = [
+
     "euclidean_score",
+
     "cosine_score",
+
     "mahalanobis_score",
+
     "knn_score"
 ]
 
+
 print("\n")
-print("=" * 60)
+print("=" * 65)
 print("ANOMALY SCORE COMPARISON")
-print("=" * 60)
+print("=" * 65)
+
 
 for method in methods:
 
-    scores = results_df[
-        method
-    ].values
+    scores = (
+        results_df[method]
+        .values
+    )
 
     auc = roc_auc_score(
         y_true,
@@ -720,35 +903,46 @@ for method in methods:
     )
 
     print(
-        f"{method:22s} "
-        f"ROC-AUC = {auc:.4f}   "
-        f"AP = {ap:.4f}"
+
+        f"{method:22s}"
+        f" ROC-AUC = {auc:.4f}"
+        f"   AP = {ap:.4f}"
     )
 
 
 # ============================================================
-# TYPE-WISE RESULTS
+# TYPE-WISE MEAN SCORES
 # ============================================================
 
 print("\n")
-print("=" * 60)
+print("=" * 65)
 print("MEAN SCORE BY ANOMALY TYPE")
-print("=" * 60)
+print("=" * 65)
 
-synthetic_results = results_df[
-    results_df["label"] == 1
-]
+synthetic_results = (
+    results_df[
+        results_df["label"] == 1
+    ]
+)
 
 print(
-    synthetic_results.groupby(
+
+    synthetic_results
+    .groupby(
         "anomaly_type"
     )[methods]
     .mean()
 )
 
 
+# ============================================================
+# OUTPUT
+# ============================================================
+
 print("\nResults saved to:")
 
 print(
     OUTPUT_FILE
 )
+
+print("\nDone.")

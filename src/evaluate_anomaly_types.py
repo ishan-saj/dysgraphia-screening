@@ -33,7 +33,7 @@ OUTPUT_FILE = (
 # SETTINGS
 # ============================================================
 
-K = 1
+K = 5
 N_SPLITS = 5
 RANDOM_STATE = 42
 
@@ -127,8 +127,6 @@ for i in range(min(10, len(source_indices))):
 # ============================================================
 # CROSS-VALIDATION
 # ============================================================
-#
-# IMPORTANT:
 #
 # Each synthetic sample is kept with the clean sample
 # it came from.
@@ -250,8 +248,9 @@ for fold, (train_indices, validation_indices) in enumerate(
         validation_clean_embeddings
     )
 
+    # Use distance to the K-th nearest clean neighbour.
     validation_clean_scores = (
-        clean_distances.mean(axis=1)
+        clean_distances[:, -1]
     )
 
 
@@ -313,8 +312,9 @@ for fold, (train_indices, validation_indices) in enumerate(
             validation_synthetic_embeddings
         )
 
+        # Use distance to the K-th nearest clean neighbour.
         validation_synthetic_scores = (
-            synthetic_distances.mean(axis=1)
+            synthetic_distances[:, -1]
         )
 
         synthetic_scores[
@@ -538,12 +538,125 @@ for anomaly_type in anomaly_types:
 
 
 # ============================================================
+# OVERALL PAIRED METRICS
+# ============================================================
+#
+# Each synthetic sample is compared with the clean sample
+# from which it was generated.
+#
+# This preserves the paired evaluation protocol.
+# ============================================================
+
+all_clean_scores = []
+
+all_synthetic_scores = []
+
+
+for i in range(
+    len(synthetic_embeddings)
+):
+
+    clean_idx = source_indices[i]
+
+    all_clean_scores.append(
+        clean_scores[clean_idx]
+    )
+
+    all_synthetic_scores.append(
+        synthetic_scores[i]
+    )
+
+
+all_clean_scores = np.array(
+    all_clean_scores
+)
+
+all_synthetic_scores = np.array(
+    all_synthetic_scores
+)
+
+
+# ------------------------------------------------------------
+# Labels
+#
+# 0 = clean
+# 1 = synthetic anomaly
+# ------------------------------------------------------------
+
+y_true_overall = np.concatenate(
+    [
+        np.zeros(
+            len(all_clean_scores)
+        ),
+        np.ones(
+            len(all_synthetic_scores)
+        )
+    ]
+)
+
+
+scores_overall = np.concatenate(
+    [
+        all_clean_scores,
+        all_synthetic_scores
+    ]
+)
+
+
+overall_auc = roc_auc_score(
+    y_true_overall,
+    scores_overall
+)
+
+overall_ap = (
+    average_precision_score(
+        y_true_overall,
+        scores_overall
+    )
+)
+
+
+# ============================================================
+# ADD OVERALL RESULT TO CSV DATA
+# ============================================================
+
+results.append(
+    {
+        "anomaly_type": "overall",
+
+        "n_synthetic":
+            len(all_synthetic_scores),
+
+        "n_clean":
+            len(all_clean_scores),
+
+        "clean_mean_score":
+            np.mean(all_clean_scores),
+
+        "synthetic_mean_score":
+            np.mean(all_synthetic_scores),
+
+        "mean_score_change":
+            np.mean(all_synthetic_scores)
+            - np.mean(all_clean_scores),
+
+        "roc_auc":
+            overall_auc,
+
+        "average_precision":
+            overall_ap
+    }
+)
+
+
+# ============================================================
 # SAVE RESULTS
 # ============================================================
 
 results_df = pd.DataFrame(
     results
 )
+
 
 results_df.to_csv(
     OUTPUT_FILE,
@@ -552,7 +665,7 @@ results_df.to_csv(
 
 
 # ============================================================
-# FINAL
+# FINAL OUTPUT
 # ============================================================
 
 print("\n")
@@ -566,8 +679,25 @@ print(
     )
 )
 
+
 print("\nSaved to:")
 
 print(
     OUTPUT_FILE
+)
+
+
+print("\n")
+print("=" * 70)
+print("OVERALL PAIRED RESULTS")
+print("=" * 70)
+
+print(
+    f"Overall ROC-AUC: "
+    f"{overall_auc:.6f}"
+)
+
+print(
+    f"Overall AP:      "
+    f"{overall_ap:.6f}"
 )
