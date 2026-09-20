@@ -40,7 +40,14 @@ data = np.load(EMBEDDING_FILE, allow_pickle=True)
 clean_embeddings = data["clean_embeddings"]
 synthetic_embeddings = data["synthetic_embeddings"]
 synthetic_types = np.array([str(x) for x in data["synthetic_types"]])
-source_indices = data["source_indices"].astype(int)
+if "source_indices" in data:
+    source_indices = data["source_indices"].astype(int)
+else:
+    meta_df = pd.read_csv(PROJECT_ROOT / "data" / "metadata" / "metadata_all.csv")
+    clean_sample_ids = meta_df["sample_id"].tolist()
+    clean_index_by_id = {clean_sample_ids[i]: i for i in range(len(clean_sample_ids))}
+    form_map = {"a05-094(1)": "a05-094", "b06-075(1)": "b06-075", "g06-037b(1)": "g06-037b"}
+    source_indices = np.array([clean_index_by_id[form_map.get(str(sf), str(sf))] for sf in data["source_forms"]], dtype=int)
 
 print("Clean:", clean_embeddings.shape)
 print("Synthetic:", synthetic_embeddings.shape)
