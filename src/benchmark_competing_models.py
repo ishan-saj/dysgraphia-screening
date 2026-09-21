@@ -28,9 +28,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
+import torch 
+import torch.nn as nn 
+from torch.utils.data import DataLoader, TensorDataset 
 from sklearn.decomposition import PCA
 from sklearn.metrics import auc, average_precision_score, roc_auc_score, roc_curve
 from sklearn.neighbors import LocalOutlierFactor, NearestNeighbors

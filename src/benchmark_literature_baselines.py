@@ -26,15 +26,15 @@ signals unavailable in offline scanned images. Cited only as methodological prec
 """
 
 from pathlib import Path
-import cv2
+import cv2 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.fftpack import dct
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
-from torchvision import models
+import torch 
+import torch.nn as nn 
+from torch.utils.data import DataLoader, TensorDataset 
+from torchvision import models 
 from sklearn.metrics import (
     auc,
     average_precision_score,
@@ -129,7 +129,7 @@ class ConvLSTMAutoencoder(nn.Module):
 def check_ocr_availability():
     """Verify whether pytesseract and the underlying Tesseract binary are installed."""
     try:
-        import pytesseract
+        import pytesseract 
         ver = pytesseract.get_tesseract_version()
         return True, f"pytesseract version {pytesseract.__version__}, tesseract engine {ver}"
     except Exception as e:
