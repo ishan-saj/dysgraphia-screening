@@ -2,7 +2,6 @@ from pathlib import Path
 import argparse
 import base64
 import html
-import math
 import re
 
 import numpy as np
@@ -60,6 +59,18 @@ WORD_FEATURES = [
     ("horizontal_projection_std", "Horizontal Projection Std"),
     ("vertical_projection_std", "Vertical Projection Std"),
     ("lower_ink_ratio", "Lower Ink Ratio"),
+]
+
+FORM_ATTRIBUTION_FEATURES = [
+    ("skew", "Skew"),
+    ("baseline_deviation", "Baseline Deviation"),
+    ("word_spacing_cv", "Word Spacing CV"),
+    ("character_height_cv", "Character Height CV"),
+    ("average_word_height", "Average Word Height"),
+    ("average_word_width", "Average Word Width"),
+    ("stroke_density", "Stroke Density"),
+    ("slant_angle", "Slant Angle"),
+    ("writing_area", "Writing Area"),
 ]
 
 
@@ -161,7 +172,9 @@ def image_to_base64(path):
         if not mime:
             return None
 
-        data = base64.b64encode(path.read_bytes()).decode("utf-8")
+        data = base64.b64encode(
+            path.read_bytes()
+        ).decode("utf-8")
 
         return f"data:{mime};base64,{data}"
 
@@ -196,26 +209,27 @@ def resolve_project_path(value):
 
 
 def find_exact_sample_image(sample_id):
-    """
-    Resolve the original handwriting image only for the requested sample.
-    Never perform a global fuzzy search that could accidentally select
-    another sample.
-    """
 
     sample_id = normalize_id(sample_id)
 
     if not sample_id:
         return None
 
-    # First use metadata_all.csv.
     if METADATA_ALL_FILE.exists():
 
         try:
-            metadata = pd.read_csv(METADATA_ALL_FILE)
+            metadata = pd.read_csv(
+                METADATA_ALL_FILE
+            )
 
             id_column = None
 
-            for col in ["sample_id", "form_id", "id"]:
+            for col in [
+                "sample_id",
+                "form_id",
+                "id"
+            ]:
+
                 if col in metadata.columns:
                     id_column = col
                     break
@@ -223,7 +237,10 @@ def find_exact_sample_image(sample_id):
             if id_column:
 
                 rows = metadata[
-                    metadata[id_column].astype(str).str.strip() == sample_id
+                    metadata[id_column]
+                    .astype(str)
+                    .str.strip()
+                    == sample_id
                 ]
 
                 if not rows.empty:
@@ -239,7 +256,9 @@ def find_exact_sample_image(sample_id):
 
                         if col in metadata.columns:
 
-                            path = resolve_project_path(row[col])
+                            path = resolve_project_path(
+                                row[col]
+                            )
 
                             if path and path.exists():
                                 return path
@@ -247,7 +266,6 @@ def find_exact_sample_image(sample_id):
         except Exception:
             pass
 
-    # Exact filename fallbacks only.
     possible = [
         DATA_DIR / "raw" / "IAM" / "images" / f"{sample_id}.png",
         DATA_DIR / "raw" / "IAM" / "images" / f"{sample_id}.jpg",
@@ -255,17 +273,31 @@ def find_exact_sample_image(sample_id):
     ]
 
     for path in possible:
+
         if path.exists():
             return path
 
-    # Search IAM image folders only for exact filename.
-    iam_images = DATA_DIR / "raw" / "IAM" / "images"
+    iam_images = (
+        DATA_DIR
+        / "raw"
+        / "IAM"
+        / "images"
+    )
 
     if iam_images.exists():
 
-        for suffix in [".png", ".jpg", ".jpeg", ".bmp"]:
+        for suffix in [
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".bmp"
+        ]:
 
-            matches = list(iam_images.rglob(sample_id + suffix))
+            matches = list(
+                iam_images.rglob(
+                    sample_id + suffix
+                )
+            )
 
             if matches:
                 return matches[0]
@@ -277,8 +309,13 @@ def find_exact_sample_image(sample_id):
 # SAMPLE FOLDER / WORD IMAGE RESOLUTION
 # ============================================================
 
-def get_sample_explainability_folder(sample_id):
-    return METADATA_DIR / f"{sample_id}_word_explainability"
+def get_sample_explainability_folder(
+    sample_id
+):
+    return (
+        METADATA_DIR
+        / f"{sample_id}_word_explainability"
+    )
 
 
 def resolve_word_image(
@@ -289,42 +326,35 @@ def resolve_word_image(
     supplied_path=None,
     image_type="original",
 ):
-    """
-    Resolve an image strictly inside the requested sample's
-    explainability folder.
-
-    Priority:
-    1. exact supplied path
-    2. exact word_id
-    3. exact rank
-    4. sanitized word
-
-    NEVER searches other sample folders.
-    """
 
     sample_id = normalize_id(sample_id)
     word_id = normalize_id(word_id)
     word = safe_text(word, "")
-    folder = get_sample_explainability_folder(sample_id)
+
+    folder = get_sample_explainability_folder(
+        sample_id
+    )
 
     if not folder.exists():
         return None
 
-    # --------------------------------------------------------
-    # 1. Supplied path from word_explainability_report.csv
-    # --------------------------------------------------------
-
     if supplied_path:
-        supplied_path = str(supplied_path).strip()
+
+        supplied_path = str(
+            supplied_path
+        ).strip()
 
         if supplied_path:
 
-            candidate = Path(supplied_path)
+            candidate = Path(
+                supplied_path
+            )
 
             candidates = []
 
             if candidate.is_absolute():
                 candidates.append(candidate)
+
             else:
                 candidates.extend([
                     PROJECT_ROOT / candidate,
@@ -335,52 +365,60 @@ def resolve_word_image(
             for candidate in candidates:
 
                 try:
+
                     candidate = candidate.resolve()
 
-                    # Security/sample isolation:
-                    folder_resolved = folder.resolve()
+                    folder_resolved = (
+                        folder.resolve()
+                    )
 
                     if (
                         candidate.exists()
-                        and folder_resolved in candidate.parents
+                        and folder_resolved
+                        in candidate.parents
                     ):
                         return candidate
 
                 except Exception:
                     pass
 
-    # --------------------------------------------------------
-    # File suffix
-    # --------------------------------------------------------
-
     suffix = f"_{image_type}.png"
-
-    # --------------------------------------------------------
-    # 2. Exact word_id
-    # --------------------------------------------------------
 
     if word_id:
 
-        matches = list(folder.glob(f"*_{word_id}{suffix}"))
+        matches = list(
+            folder.glob(
+                f"*_{word_id}{suffix}"
+            )
+        )
 
         if matches:
             return matches[0]
 
-        matches = list(folder.glob(f"*{word_id}*{suffix}"))
+        matches = list(
+            folder.glob(
+                f"*{word_id}*{suffix}"
+            )
+        )
 
         if matches:
             return matches[0]
-
-    # --------------------------------------------------------
-    # 3. Exact rank
-    # --------------------------------------------------------
 
     try:
-        rank_number = int(float(rank))
 
-        rank_prefix = f"{rank_number:02d}_"
+        rank_number = int(
+            float(rank)
+        )
 
-        matches = list(folder.glob(f"{rank_prefix}*{suffix}"))
+        rank_prefix = (
+            f"{rank_number:02d}_"
+        )
+
+        matches = list(
+            folder.glob(
+                f"{rank_prefix}*{suffix}"
+            )
+        )
 
         if matches:
             return matches[0]
@@ -388,20 +426,29 @@ def resolve_word_image(
     except Exception:
         pass
 
-    # --------------------------------------------------------
-    # 4. Sanitized word
-    # --------------------------------------------------------
+    clean_word = safe_filename(
+        word
+    )
 
-    clean_word = safe_filename(word)
+    if (
+        clean_word
+        and clean_word != "unknown"
+    ):
 
-    if clean_word and clean_word != "unknown":
-
-        matches = list(folder.glob(f"*_{clean_word}{suffix}"))
+        matches = list(
+            folder.glob(
+                f"*_{clean_word}{suffix}"
+            )
+        )
 
         if matches:
             return matches[0]
 
-        matches = list(folder.glob(f"*{clean_word}*{suffix}"))
+        matches = list(
+            folder.glob(
+                f"*{clean_word}*{suffix}"
+            )
+        )
 
         if matches:
             return matches[0]
@@ -414,24 +461,48 @@ def resolve_word_image(
 # ============================================================
 
 def load_csv(path):
+
     if not path.exists():
         return pd.DataFrame()
 
     try:
         return pd.read_csv(path)
+
     except Exception as exc:
-        print(f"WARNING: Could not read {path}: {exc}")
+
+        print(
+            f"WARNING: Could not read "
+            f"{path}: {exc}"
+        )
+
         return pd.DataFrame()
 
 
 def load_data():
 
-    master = load_csv(MASTER_FILE)
-    anomaly = load_csv(ANOMALY_FILE)
-    word_anomaly = load_csv(WORD_ANOMALY_FILE)
-    word_summary = load_csv(WORD_SUMMARY_FILE)
-    metadata = load_csv(METADATA_ALL_FILE)
-    words_metadata = load_csv(WORDS_METADATA_FILE)
+    master = load_csv(
+        MASTER_FILE
+    )
+
+    anomaly = load_csv(
+        ANOMALY_FILE
+    )
+
+    word_anomaly = load_csv(
+        WORD_ANOMALY_FILE
+    )
+
+    word_summary = load_csv(
+        WORD_SUMMARY_FILE
+    )
+
+    metadata = load_csv(
+        METADATA_ALL_FILE
+    )
+
+    words_metadata = load_csv(
+        WORDS_METADATA_FILE
+    )
 
     return (
         master,
@@ -447,7 +518,12 @@ def load_data():
 # SAMPLE ROW
 # ============================================================
 
-def get_row_from_file(df, sample_id, id_columns):
+def get_row_from_file(
+    df,
+    sample_id,
+    id_columns
+):
+
     if df.empty:
         return None
 
@@ -457,7 +533,10 @@ def get_row_from_file(df, sample_id, id_columns):
             continue
 
         rows = df[
-            df[col].astype(str).str.strip() == sample_id
+            df[col]
+            .astype(str)
+            .str.strip()
+            == sample_id
         ]
 
         if not rows.empty:
@@ -473,143 +552,706 @@ def get_sample_row(
     word_summary,
     metadata,
 ):
-    """
-    Source-of-truth strategy:
-
-    metadata:
-        sample metadata / OpenCV values / image information
-
-    anomaly:
-        form-level anomaly score
-
-    word_summary:
-        word-level aggregate statistics
-
-    master:
-        integration / percentile / combined / agreement fields
-    """
 
     row = {}
 
     metadata_row = get_row_from_file(
         metadata,
         sample_id,
-        ["sample_id", "form_id", "id"],
+        [
+            "sample_id",
+            "form_id",
+            "id",
+        ],
     )
 
     anomaly_row = get_row_from_file(
         anomaly,
         sample_id,
-        ["sample_id", "form_id", "id"],
+        [
+            "sample_id",
+            "form_id",
+            "id",
+        ],
     )
 
     word_summary_row = get_row_from_file(
         word_summary,
         sample_id,
-        ["sample_id", "form_id", "id"],
+        [
+            "sample_id",
+            "form_id",
+            "id",
+        ],
     )
 
     master_row = get_row_from_file(
         master,
         sample_id,
-        ["sample_id", "form_id", "id"],
+        [
+            "sample_id",
+            "form_id",
+            "id",
+        ],
     )
 
-    # Base metadata.
     if metadata_row is not None:
-        row.update(metadata_row.to_dict())
 
-    # Form anomaly fields.
+        row.update(
+            metadata_row.to_dict()
+        )
+
     if anomaly_row is not None:
-        for key, value in anomaly_row.to_dict().items():
+
+        for key, value in (
+            anomaly_row
+            .to_dict()
+            .items()
+        ):
+
             row[key] = value
 
-    # Word summary fields.
     if word_summary_row is not None:
-        for key, value in word_summary_row.to_dict().items():
+
+        for key, value in (
+            word_summary_row
+            .to_dict()
+            .items()
+        ):
+
             row[key] = value
 
-    # Master integration is authoritative for integration fields.
     if master_row is not None:
-        for key, value in master_row.to_dict().items():
+
+        for key, value in (
+            master_row
+            .to_dict()
+            .items()
+        ):
+
             row[key] = value
 
     return pd.Series(row)
 
 
 # ============================================================
+# FORM-LEVEL FEATURE ATTRIBUTION
+# ============================================================
+
+def load_form_feature_attribution(
+    sample_id
+):
+
+    attribution_file = (
+        METADATA_DIR
+        / f"{safe_filename(sample_id)}"
+        "_form_feature_attribution.csv"
+    )
+
+    if not attribution_file.exists():
+
+        return (
+            pd.DataFrame(),
+            attribution_file
+        )
+
+    try:
+
+        df = pd.read_csv(
+            attribution_file
+        )
+
+        required_columns = [
+            "feature",
+            "original_value",
+            "reference_value",
+            "embedding_change",
+            "relative_contribution_pct",
+        ]
+
+        missing = [
+            col
+            for col in required_columns
+            if col not in df.columns
+        ]
+
+        if missing:
+
+            print(
+                "WARNING: Form attribution file "
+                f"is missing columns: {missing}"
+            )
+
+            return (
+                pd.DataFrame(),
+                attribution_file
+            )
+
+        # Clean numeric fields.
+
+        for col in [
+            "original_value",
+            "reference_value",
+            "embedding_change",
+            "relative_contribution_pct",
+        ]:
+
+            df[col] = pd.to_numeric(
+                df[col],
+                errors="coerce"
+            )
+
+        df = df.dropna(
+            subset=[
+                "embedding_change",
+                "relative_contribution_pct",
+            ]
+        )
+
+        # Always rank by actual measured
+        # embedding change.
+
+        df = df.sort_values(
+            "embedding_change",
+            ascending=False
+        ).reset_index(
+            drop=True
+        )
+
+        df["rank"] = np.arange(
+            1,
+            len(df) + 1
+        )
+
+        return (
+            df,
+            attribution_file
+        )
+
+    except Exception as exc:
+
+        print(
+            f"WARNING: Could not load "
+            f"{attribution_file}: {exc}"
+        )
+
+        return (
+            pd.DataFrame(),
+            attribution_file
+        )
+
+
+def create_form_attribution_section(
+    sample_id
+):
+
+    attribution_df, attribution_file = (
+        load_form_feature_attribution(
+            sample_id
+        )
+    )
+
+    if attribution_df.empty:
+
+        return f"""
+        <section>
+
+        <h2>5. Form-Level Feature Attribution</h2>
+
+        <div class="warning">
+
+        <strong>
+        Form-level attribution not available.
+        </strong>
+
+        <p>
+        No sample-specific attribution file was found for
+        <strong>{html_escape(sample_id)}</strong>.
+        </p>
+
+        <p>
+        Generate it using:
+        </p>
+
+        <code>
+        python src/form_feature_attribution.py
+        {html_escape(sample_id)}
+        </code>
+
+        </div>
+
+        </section>
+        """
+
+    # --------------------------------------------------------
+    # Top feature
+    # --------------------------------------------------------
+
+    top = attribution_df.iloc[0]
+
+    top_feature = safe_text(
+        top["feature"],
+        "N/A"
+    )
+
+    top_label = dict(
+        FORM_ATTRIBUTION_FEATURES
+    ).get(
+        top_feature,
+        top_feature.replace(
+            "_",
+            " "
+        ).title(),
+    )
+
+    top_original = safe_float(
+        top["original_value"]
+    )
+
+    top_reference = safe_float(
+        top["reference_value"]
+    )
+
+    top_change = safe_float(
+        top["embedding_change"]
+    )
+
+    top_contribution = safe_float(
+        top["relative_contribution_pct"]
+    )
+
+    # --------------------------------------------------------
+    # Table
+    # --------------------------------------------------------
+
+    table_rows = []
+
+    for _, item in attribution_df.iterrows():
+
+        feature = safe_text(
+            item["feature"],
+            "N/A"
+        )
+
+        label = dict(
+            FORM_ATTRIBUTION_FEATURES
+        ).get(
+            feature,
+            feature.replace(
+                "_",
+                " "
+            ).title(),
+        )
+
+        original = safe_float(
+            item["original_value"]
+        )
+
+        reference = safe_float(
+            item["reference_value"]
+        )
+
+        change = safe_float(
+            item["embedding_change"]
+        )
+
+        contribution = safe_float(
+            item[
+                "relative_contribution_pct"
+            ]
+        )
+
+        table_rows.append(
+            f"""
+            <tr>
+                <td>
+                    <strong>
+                    {int(item["rank"])}
+                    </strong>
+                </td>
+
+                <td>
+                    {html_escape(label)}
+                </td>
+
+                <td>
+                    {format_number(
+                        original,
+                        5
+                    )}
+                </td>
+
+                <td>
+                    {format_number(
+                        reference,
+                        5
+                    )}
+                </td>
+
+                <td>
+                    {format_number(
+                        change,
+                        6
+                    )}
+                </td>
+
+                <td>
+                    <strong>
+                    {format_percent(
+                        contribution,
+                        2
+                    )}
+                    </strong>
+                </td>
+            </tr>
+            """
+        )
+
+    # --------------------------------------------------------
+    # Sample-specific interpretation
+    # --------------------------------------------------------
+
+    second_text = ""
+
+    if len(attribution_df) >= 2:
+
+        second = attribution_df.iloc[1]
+
+        second_feature = safe_text(
+            second["feature"],
+            "N/A"
+        )
+
+        second_label = dict(
+            FORM_ATTRIBUTION_FEATURES
+        ).get(
+            second_feature,
+            second_feature.replace(
+                "_",
+                " "
+            ).title(),
+        )
+
+        second_contribution = (
+            safe_float(
+                second[
+                    "relative_contribution_pct"
+                ]
+            )
+        )
+
+        second_text = (
+            f"The next most influential feature was "
+            f"<strong>{html_escape(second_label)}</strong>, "
+            f"accounting for approximately "
+            f"<strong>{format_percent(second_contribution, 2)}</strong> "
+            "of the measured embedding change."
+        )
+
+    # --------------------------------------------------------
+    # Determine whether top few are close
+    # --------------------------------------------------------
+
+    close_top_features = False
+
+    if len(attribution_df) >= 3:
+
+        first_pct = safe_float(
+            attribution_df.iloc[0][
+                "relative_contribution_pct"
+            ]
+        )
+
+        third_pct = safe_float(
+            attribution_df.iloc[2][
+                "relative_contribution_pct"
+            ]
+        )
+
+        if (
+            np.isfinite(first_pct)
+            and np.isfinite(third_pct)
+            and abs(first_pct - third_pct) < 5
+        ):
+
+            close_top_features = True
+
+    if close_top_features:
+
+        joint_pattern = (
+            "The leading features have relatively similar "
+            "contributions, so the result should be interpreted "
+            "as a multi-feature pattern rather than evidence that "
+            "one feature alone explains the sample."
+        )
+
+    else:
+
+        joint_pattern = (
+            "The ranking indicates which individual feature "
+            "replacement produced the largest representation "
+            "change in this sample."
+        )
+
+    return f"""
+    <section>
+
+    <h2>5. Form-Level Feature Attribution</h2>
+
+    <p>
+    A one-feature-at-a-time sensitivity analysis was performed
+    on the nine selected form-level OpenCV features. For each
+    experiment, one feature was replaced by its training-set
+    reference value while all other sample features were kept
+    unchanged.
+    </p>
+
+    <div class="attribution-highlight">
+
+        <div class="attribution-title">
+            Most Influential Form-Level Feature
+        </div>
+
+        <h3>
+            {html_escape(top_label)}
+        </h3>
+
+        <div class="attribution-grid">
+
+            <div>
+                <span>Original Value</span>
+                <strong>
+                    {format_number(
+                        top_original,
+                        5
+                    )}
+                </strong>
+            </div>
+
+            <div>
+                <span>Training Reference</span>
+                <strong>
+                    {format_number(
+                        top_reference,
+                        5
+                    )}
+                </strong>
+            </div>
+
+            <div>
+                <span>Embedding Change</span>
+                <strong>
+                    {format_number(
+                        top_change,
+                        6
+                    )}
+                </strong>
+            </div>
+
+            <div>
+                <span>Relative Contribution</span>
+                <strong>
+                    {format_percent(
+                        top_contribution,
+                        2
+                    )}
+                </strong>
+            </div>
+
+        </div>
+
+    </div>
+
+    <h3>Feature Attribution Ranking</h3>
+
+    <table>
+
+        <thead>
+
+        <tr>
+            <th>Rank</th>
+            <th>Form-Level Feature</th>
+            <th>Original Value</th>
+            <th>Training Reference</th>
+            <th>Embedding Change</th>
+            <th>Relative Contribution</th>
+        </tr>
+
+        </thead>
+
+        <tbody>
+
+        {''.join(table_rows)}
+
+        </tbody>
+
+    </table>
+
+    <h3>Sample-Specific Interpretation</h3>
+
+    <p>
+    For <strong>{html_escape(sample_id)}</strong>,
+    replacing
+    <strong>{html_escape(top_label)}</strong>
+    with its training reference value produced the largest
+    change in the learned 256-dimensional representation,
+    with an embedding change of
+    <strong>{format_number(top_change, 6)}</strong>.
+    This feature accounted for approximately
+    <strong>{format_percent(top_contribution, 2)}</strong>
+    of the total measured one-feature-at-a-time embedding change.
+    </p>
+
+    <p>
+    {second_text}
+    </p>
+
+    <p>
+    {joint_pattern}
+    </p>
+
+    <div class="note">
+
+    <strong>How to interpret this analysis:</strong>
+
+    The contribution percentage represents model sensitivity
+    to controlled replacement of an individual feature.
+    It does <strong>not</strong> mean that the feature caused
+    the anomaly, caused dysgraphia, or represents a probability
+    of dysgraphia.
+
+    </div>
+
+    <p class="source-note">
+    Attribution source:
+    <code>
+    {html_escape(
+        attribution_file.name
+    )}
+    </code>
+    </p>
+
+    </section>
+    """
+
+
+# ============================================================
 # WORD EXPLAINABILITY
 # ============================================================
 
-def load_word_explainability(sample_id):
+def load_word_explainability(
+    sample_id
+):
 
-    folder = get_sample_explainability_folder(sample_id)
+    folder = get_sample_explainability_folder(
+        sample_id
+    )
 
-    report_file = folder / "word_explainability_report.csv"
+    report_file = (
+        folder
+        / "word_explainability_report.csv"
+    )
 
     if not report_file.exists():
         return pd.DataFrame()
 
     try:
-        df = pd.read_csv(report_file)
+
+        df = pd.read_csv(
+            report_file
+        )
 
         if "sample_id" in df.columns:
 
             df = df[
-                df["sample_id"].astype(str).str.strip() == sample_id
+                df["sample_id"]
+                .astype(str)
+                .str.strip()
+                == sample_id
             ]
 
         return df
 
     except Exception as exc:
-        print(f"WARNING: Could not read {report_file}: {exc}")
+
+        print(
+            f"WARNING: Could not read "
+            f"{report_file}: {exc}"
+        )
+
         return pd.DataFrame()
 
 
 def get_word_id_column(df):
 
-    for col in ["word_id", "id"]:
+    for col in [
+        "word_id",
+        "id"
+    ]:
+
         if col in df.columns:
             return col
 
     return None
 
 
-def filter_word_anomaly_for_sample(word_df, sample_id):
+def filter_word_anomaly_for_sample(
+    word_df,
+    sample_id
+):
 
     if word_df.empty:
         return pd.DataFrame()
 
-    for col in ["form_id", "sample_id"]:
+    for col in [
+        "form_id",
+        "sample_id"
+    ]:
 
         if col in word_df.columns:
 
             result = word_df[
-                word_df[col].astype(str).str.strip() == sample_id
+                word_df[col]
+                .astype(str)
+                .str.strip()
+                == sample_id
             ].copy()
 
             if not result.empty:
                 return result
 
-    return pd.DataFrame(columns=word_df.columns)
+    return pd.DataFrame(
+        columns=word_df.columns
+    )
 
 
 # ============================================================
 # WORD TEXT LOOKUP
 # ============================================================
 
-def lookup_word_text(word_id, words_metadata):
+def lookup_word_text(
+    word_id,
+    words_metadata
+):
 
-    if words_metadata.empty or not word_id:
+    if (
+        words_metadata.empty
+        or not word_id
+    ):
         return None
 
-    id_column = get_word_id_column(words_metadata)
+    id_column = get_word_id_column(
+        words_metadata
+    )
 
     if not id_column:
         return None
 
     rows = words_metadata[
-        words_metadata[id_column].astype(str).str.strip() == str(word_id).strip()
+        words_metadata[id_column]
+        .astype(str)
+        .str.strip()
+        == str(word_id).strip()
     ]
 
     if rows.empty:
@@ -627,7 +1269,10 @@ def lookup_word_text(word_id, words_metadata):
 
         if col in words_metadata.columns:
 
-            value = safe_text(row[col], "")
+            value = safe_text(
+                row[col],
+                ""
+            )
 
             if value:
                 return value
@@ -639,9 +1284,14 @@ def lookup_word_text(word_id, words_metadata):
 # DATASET PERCENTILES
 # ============================================================
 
-def percentile_rank(value, values):
+def percentile_rank(
+    value,
+    values
+):
 
-    value = safe_float(value)
+    value = safe_float(
+        value
+    )
 
     if not np.isfinite(value):
         return np.nan
@@ -655,36 +1305,46 @@ def percentile_rank(value, values):
         return np.nan
 
     return float(
-        (clean <= value).mean() * 100
+        (
+            clean <= value
+        ).mean()
+        * 100
     )
 
 
-def get_dataset_percentiles(sample_id, master, word_summary):
+def get_dataset_percentiles(
+    sample_id,
+    master,
+    word_summary
+):
 
     result = {
         "resnet_percentile": np.nan,
         "word_percentile": np.nan,
     }
 
-    # --------------------------------------------------------
-    # ResNet percentile
-    # --------------------------------------------------------
-
     if not master.empty:
 
         if "sample_id" in master.columns:
 
             sample_rows = master[
-                master["sample_id"].astype(str).str.strip() == sample_id
+                master["sample_id"]
+                .astype(str)
+                .str.strip()
+                == sample_id
             ]
 
         elif "form_id" in master.columns:
 
             sample_rows = master[
-                master["form_id"].astype(str).str.strip() == sample_id
+                master["form_id"]
+                .astype(str)
+                .str.strip()
+                == sample_id
             ]
 
         else:
+
             sample_rows = pd.DataFrame()
 
         if not sample_rows.empty:
@@ -700,6 +1360,7 @@ def get_dataset_percentiles(sample_id, master, word_summary):
             ]:
 
                 if col in master.columns:
+
                     resnet_value = row[col]
                     break
 
@@ -713,16 +1374,14 @@ def get_dataset_percentiles(sample_id, master, word_summary):
 
                     if col in master.columns:
 
-                        result["resnet_percentile"] = percentile_rank(
+                        result[
+                            "resnet_percentile"
+                        ] = percentile_rank(
                             resnet_value,
                             master[col],
                         )
 
                         break
-
-    # --------------------------------------------------------
-    # Word percentile
-    # --------------------------------------------------------
 
     if not word_summary.empty:
 
@@ -731,13 +1390,19 @@ def get_dataset_percentiles(sample_id, master, word_summary):
         if "sample_id" in word_summary.columns:
 
             sample_rows = word_summary[
-                word_summary["sample_id"].astype(str).str.strip() == sample_id
+                word_summary["sample_id"]
+                .astype(str)
+                .str.strip()
+                == sample_id
             ]
 
         elif "form_id" in word_summary.columns:
 
             sample_rows = word_summary[
-                word_summary["form_id"].astype(str).str.strip() == sample_id
+                word_summary["form_id"]
+                .astype(str)
+                .str.strip()
+                == sample_id
             ]
 
         if not sample_rows.empty:
@@ -753,6 +1418,7 @@ def get_dataset_percentiles(sample_id, master, word_summary):
             ]:
 
                 if col in word_summary.columns:
+
                     word_value = row[col]
                     break
 
@@ -766,7 +1432,9 @@ def get_dataset_percentiles(sample_id, master, word_summary):
 
                     if col in word_summary.columns:
 
-                        result["word_percentile"] = percentile_rank(
+                        result[
+                            "word_percentile"
+                        ] = percentile_rank(
                             word_value,
                             word_summary[col],
                         )
@@ -780,9 +1448,11 @@ def get_dataset_percentiles(sample_id, master, word_summary):
 # AGREEMENT
 # ============================================================
 
-def get_agreement(row, percentiles):
+def get_agreement(
+    row,
+    percentiles
+):
 
-    # Prefer the official master-analysis category.
     for col in [
         "anomaly_agreement",
         "agreement_category",
@@ -791,15 +1461,27 @@ def get_agreement(row, percentiles):
 
         if col in row.index:
 
-            value = safe_text(row.get(col), "")
+            value = safe_text(
+                row.get(col),
+                ""
+            )
 
             if value:
                 return value
 
-    rp = percentiles["resnet_percentile"]
-    wp = percentiles["word_percentile"]
+    rp = percentiles[
+        "resnet_percentile"
+    ]
 
-    if not np.isfinite(rp) or not np.isfinite(wp):
+    wp = percentiles[
+        "word_percentile"
+    ]
+
+    if (
+        not np.isfinite(rp)
+        or not np.isfinite(wp)
+    ):
+
         return "Not available"
 
     if rp >= 75 and wp >= 75:
@@ -828,24 +1510,33 @@ def get_top_words(
 
     word_df = filter_word_anomaly_for_sample(
         word_df,
-        sample_id,
+        sample_id
     )
 
     if word_df.empty:
         return pd.DataFrame()
 
-    if "word_anomaly_score" not in word_df.columns:
+    if (
+        "word_anomaly_score"
+        not in word_df.columns
+    ):
         return pd.DataFrame()
 
     word_df = word_df.copy()
 
-    word_df["word_anomaly_score"] = pd.to_numeric(
-        word_df["word_anomaly_score"],
-        errors="coerce",
+    word_df[
+        "word_anomaly_score"
+    ] = pd.to_numeric(
+        word_df[
+            "word_anomaly_score"
+        ],
+        errors="coerce"
     )
 
     word_df = word_df.dropna(
-        subset=["word_anomaly_score"]
+        subset=[
+            "word_anomaly_score"
+        ]
     )
 
     word_df = word_df.sort_values(
@@ -853,7 +1544,9 @@ def get_top_words(
         ascending=False,
     ).head(number)
 
-    word_id_col = get_word_id_column(word_df)
+    word_id_col = get_word_id_column(
+        word_df
+    )
 
     if word_id_col:
 
@@ -867,22 +1560,26 @@ def get_top_words(
 
         word_df["_join_word_id"] = ""
 
-    # --------------------------------------------------------
-    # Join explainability only from this sample.
-    # --------------------------------------------------------
-
     if not explanation_df.empty:
 
-        explanation_df = explanation_df.copy()
+        explanation_df = (
+            explanation_df.copy()
+        )
 
-        explanation_id_col = get_word_id_column(
-            explanation_df
+        explanation_id_col = (
+            get_word_id_column(
+                explanation_df
+            )
         )
 
         if explanation_id_col:
 
-            explanation_df["_join_word_id"] = (
-                explanation_df[explanation_id_col]
+            explanation_df[
+                "_join_word_id"
+            ] = (
+                explanation_df[
+                    explanation_id_col
+                ]
                 .astype(str)
                 .str.strip()
             )
@@ -899,26 +1596,29 @@ def get_top_words(
             ]
 
             keep_cols = [
-                col for col in keep_cols
+                col
+                for col in keep_cols
                 if col in explanation_df.columns
             ]
 
-            explanation_small = explanation_df[
-                keep_cols
-            ].drop_duplicates(
-                "_join_word_id"
+            explanation_small = (
+                explanation_df[
+                    keep_cols
+                ]
+                .drop_duplicates(
+                    "_join_word_id"
+                )
             )
 
             word_df = word_df.merge(
                 explanation_small,
                 on="_join_word_id",
                 how="left",
-                suffixes=("", "_explanation"),
+                suffixes=(
+                    "",
+                    "_explanation"
+                ),
             )
-
-    # --------------------------------------------------------
-    # Retrieve actual word text.
-    # --------------------------------------------------------
 
     words = []
 
@@ -927,15 +1627,31 @@ def get_top_words(
         word = None
 
         if "word" in row.index:
-            word = safe_text(row["word"], "")
 
-        if not word and "word_explanation" in row.index:
-            word = safe_text(row["word_explanation"], "")
+            word = safe_text(
+                row["word"],
+                ""
+            )
+
+        if (
+            not word
+            and "word_explanation"
+            in row.index
+        ):
+
+            word = safe_text(
+                row[
+                    "word_explanation"
+                ],
+                ""
+            )
 
         if not word:
 
             word_id = safe_text(
-                row.get("_join_word_id"),
+                row.get(
+                    "_join_word_id"
+                ),
                 "",
             )
 
@@ -945,15 +1661,21 @@ def get_top_words(
             )
 
         words.append(
-            word if word else "Unknown"
+            word
+            if word
+            else "Unknown"
         )
 
-    word_df["resolved_word"] = words
+    word_df[
+        "resolved_word"
+    ] = words
 
     return word_df
 
 
-def dominant_word_features(top_words):
+def dominant_word_features(
+    top_words
+):
 
     if top_words.empty:
         return []
@@ -963,15 +1685,23 @@ def dominant_word_features(top_words):
     for _, row in top_words.iterrows():
 
         feature = safe_text(
-            row.get("main_anomaly_feature"),
+            row.get(
+                "main_anomaly_feature"
+            ),
             "",
         )
 
         if not feature:
             continue
 
-        feature_counts[feature] = (
-            feature_counts.get(feature, 0) + 1
+        feature_counts[
+            feature
+        ] = (
+            feature_counts.get(
+                feature,
+                0
+            )
+            + 1
         )
 
     return sorted(
@@ -985,9 +1715,14 @@ def dominant_word_features(top_words):
 # FEATURE INTERPRETATION
 # ============================================================
 
-def interpret_sample_feature(feature, value):
+def interpret_sample_feature(
+    feature,
+    value
+):
 
-    value = safe_float(value)
+    value = safe_float(
+        value
+    )
 
     if not np.isfinite(value):
         return "Measurement unavailable."
@@ -1055,36 +1790,10 @@ def build_sample_findings(
     agreement,
 ):
 
-    resnet = safe_float(
-        row.get("resnet_anomaly_score")
-    )
-
-    if not np.isfinite(resnet):
-        resnet = safe_float(
-            row.get("anomaly_score_0_100")
+    feature_counts = (
+        dominant_word_features(
+            top_words
         )
-
-    mean_word = safe_float(
-        row.get("mean_word_anomaly")
-    )
-
-    max_word = safe_float(
-        row.get("maximum_word_anomaly")
-    )
-
-    top5 = safe_float(
-        row.get("top_5_mean_anomaly")
-    )
-
-    rp = percentiles["resnet_percentile"]
-    wp = percentiles["word_percentile"]
-
-    # --------------------------------------------------------
-    # Dominant word features.
-    # --------------------------------------------------------
-
-    feature_counts = dominant_word_features(
-        top_words
     )
 
     dominant_feature = (
@@ -1099,24 +1808,30 @@ def build_sample_findings(
         else 0
     )
 
-    # --------------------------------------------------------
-    # Highest Z-score.
-    # --------------------------------------------------------
-
     highest_z = np.nan
     highest_z_feature = None
 
     if not top_words.empty:
 
-        for _, word in top_words.iterrows():
+        for _, word in (
+            top_words.iterrows()
+        ):
 
             z = safe_float(
-                word.get("main_feature_z")
+                word.get(
+                    "main_feature_z"
+                )
             )
 
             if np.isfinite(z):
 
-                if not np.isfinite(highest_z) or abs(z) > abs(highest_z):
+                if (
+                    not np.isfinite(
+                        highest_z
+                    )
+                    or abs(z)
+                    > abs(highest_z)
+                ):
 
                     highest_z = z
 
@@ -1126,10 +1841,6 @@ def build_sample_findings(
                         ),
                         "",
                     )
-
-    # --------------------------------------------------------
-    # Agreement narrative.
-    # --------------------------------------------------------
 
     if agreement == "High in both":
 
@@ -1205,52 +1916,52 @@ def build_sample_findings(
             "distribution used by the research pipeline."
         )
 
-    # --------------------------------------------------------
-    # Word-level pattern.
-    # --------------------------------------------------------
-
     if dominant_feature:
 
         feature_label = dict(
             WORD_FEATURES
         ).get(
             dominant_feature,
-            dominant_feature.replace("_", " ").title(),
+            dominant_feature.replace(
+                "_",
+                " "
+            ).title(),
         )
 
         word_pattern = (
             f"The dominant word-level anomaly feature among the "
-            f"top-ranked words is <strong>{html_escape(feature_label)}</strong>, "
-            f"appearing in {dominant_count} of the top {len(top_words)} "
-            "anomalous words."
+            f"top-ranked words is <strong>"
+            f"{html_escape(feature_label)}</strong>, "
+            f"appearing in {dominant_count} of the top "
+            f"{len(top_words)} anomalous words."
         )
 
     else:
 
         word_pattern = (
-            "A dominant word-level anomaly feature could not be "
-            "determined from the available records."
+            "A dominant word-level anomaly feature could not "
+            "be determined from the available records."
         )
-
-    # --------------------------------------------------------
-    # Z-score pattern.
-    # --------------------------------------------------------
 
     if np.isfinite(highest_z):
 
-        z_label = (
-            dict(WORD_FEATURES).get(
+        z_label = dict(
+            WORD_FEATURES
+        ).get(
+            highest_z_feature,
+            safe_text(
                 highest_z_feature,
-                safe_text(
-                    highest_z_feature,
-                    "word-level feature",
-                ).replace("_", " ").title(),
-            )
+                "word-level feature",
+            ).replace(
+                "_",
+                " "
+            ).title(),
         )
 
         z_pattern = (
             f"The strongest absolute robust Z-score among the "
-            f"top-ranked words is <strong>{format_number(highest_z, 2)}</strong> "
+            f"top-ranked words is <strong>"
+            f"{format_number(highest_z, 2)}</strong> "
             f"for {html_escape(z_label)}."
         )
 
@@ -1261,9 +1972,13 @@ def build_sample_findings(
             "word-level records."
         )
 
-    # --------------------------------------------------------
-    # Percentile evidence.
-    # --------------------------------------------------------
+    rp = percentiles[
+        "resnet_percentile"
+    ]
+
+    wp = percentiles[
+        "word_percentile"
+    ]
 
     percentile_text = []
 
@@ -1284,7 +1999,10 @@ def build_sample_findings(
     if percentile_text:
 
         relative_position = (
-            " and ".join(percentile_text) + "."
+            " and ".join(
+                percentile_text
+            )
+            + "."
         )
 
     else:
@@ -1292,10 +2010,6 @@ def build_sample_findings(
         relative_position = (
             "dataset percentile information is not available."
         )
-
-    # --------------------------------------------------------
-    # Sample-specific conclusion.
-    # --------------------------------------------------------
 
     if agreement == "High in both":
 
@@ -1307,7 +2021,7 @@ def build_sample_findings(
             "elevated deviations. "
             f"{word_pattern} "
             f"{z_pattern} "
-            "Taken together, this makes the sample a strong example "
+            "Taken together, this makes the sample an example "
             "of agreement between the two anomaly-detection views."
         )
 
@@ -1320,10 +2034,8 @@ def build_sample_findings(
             f"{word_pattern} "
             f"{z_pattern} "
             "The word-level evidence is present but comparatively "
-            "weaker, which is why the two pipelines do not produce "
-            "a High in both result. This sample demonstrates the "
-            "value of separating global handwriting representation "
-            "from local word-level analysis."
+            "weaker, demonstrating the value of separating global "
+            "handwriting representation from local word-level analysis."
         )
 
     elif agreement == "High word anomaly only":
@@ -1369,9 +2081,15 @@ def build_sample_findings(
 # HTML COMPONENTS
 # ============================================================
 
-def image_html(path, alt, class_name="report-image"):
+def image_html(
+    path,
+    alt,
+    class_name="report-image"
+):
 
-    encoded = image_to_base64(path)
+    encoded = image_to_base64(
+        path
+    )
 
     if not encoded:
 
@@ -1385,11 +2103,13 @@ def image_html(path, alt, class_name="report-image"):
 
     return f"""
     <div class="image-container">
+
         <img
             src="{encoded}"
             alt="{html_escape(alt)}"
             class="{class_name}"
         >
+
     </div>
     """
 
@@ -1402,14 +2122,20 @@ def create_sample_specific_section(
 
     return f"""
     <section>
+
         <h2>1. Sample-Specific Finding</h2>
 
         <div class="finding-hero">
+
             <div class="finding-badge">
-                {html_escape(findings["headline"])}
+                {html_escape(
+                    findings["headline"]
+                )}
             </div>
 
-            <h3>{html_escape(sample_id)}</h3>
+            <h3>
+                {html_escape(sample_id)}
+            </h3>
 
             <p>
                 {findings["finding"]}
@@ -1423,40 +2149,63 @@ def create_sample_specific_section(
 
                 <div class="evidence-card">
                     <span>Agreement</span>
-                    <strong>{html_escape(agreement)}</strong>
+                    <strong>
+                        {html_escape(
+                            agreement
+                        )}
+                    </strong>
                 </div>
 
                 <div class="evidence-card">
                     <span>Dominant Word Feature</span>
                     <strong>
                         {html_escape(
-                            findings["dominant_feature"] or "N/A"
-                        ).replace("_", " ")}
+                            findings[
+                                "dominant_feature"
+                            ]
+                            or "N/A"
+                        ).replace(
+                            "_",
+                            " "
+                        )}
                     </strong>
                 </div>
 
                 <div class="evidence-card">
                     <span>Highest Word Z-score</span>
                     <strong>
-                        {format_number(findings["highest_z"], 2)}
+                        {format_number(
+                            findings[
+                                "highest_z"
+                            ],
+                            2
+                        )}
                     </strong>
                 </div>
 
             </div>
 
-            <h3>What this sample tells us</h3>
+            <h3>
+                What this sample tells us
+            </h3>
 
             <p>
                 {findings["what_it_tells"]}
             </p>
 
             <div class="note">
+
                 <strong>Important:</strong>
-                These findings describe statistical and representational
-                deviations from the reference distributions. They do not
-                establish dysgraphia or any other clinical condition.
+
+                These findings describe statistical and
+                representational deviations from the reference
+                distributions. They do not establish dysgraphia
+                or any other clinical condition.
+
             </div>
+
         </div>
+
     </section>
     """
 
@@ -1475,122 +2224,212 @@ def create_summary_cards(
 
         <div class="metric-card">
             <span>Form-Level ResNet50</span>
-            <strong>{format_number(resnet, 2)}</strong>
+            <strong>
+                {format_number(
+                    resnet,
+                    2
+                )}
+            </strong>
         </div>
 
         <div class="metric-card">
             <span>Mean Word Anomaly</span>
-            <strong>{format_number(mean_word, 3)}</strong>
+            <strong>
+                {format_number(
+                    mean_word,
+                    3
+                )}
+            </strong>
         </div>
 
         <div class="metric-card">
             <span>Maximum Word Anomaly</span>
-            <strong>{format_number(max_word, 3)}</strong>
+            <strong>
+                {format_number(
+                    max_word,
+                    3
+                )}
+            </strong>
         </div>
 
         <div class="metric-card">
             <span>Top-5 Mean Word Anomaly</span>
-            <strong>{format_number(top5, 3)}</strong>
+            <strong>
+                {format_number(
+                    top5,
+                    3
+                )}
+            </strong>
         </div>
 
         <div class="metric-card">
             <span>Combined Research Score</span>
-            <strong>{format_number(combined, 2)}</strong>
+            <strong>
+                {format_number(
+                    combined,
+                    2
+                )}
+            </strong>
         </div>
 
         <div class="metric-card">
             <span>Agreement</span>
-            <strong>{html_escape(agreement)}</strong>
+            <strong>
+                {html_escape(
+                    agreement
+                )}
+            </strong>
         </div>
 
     </div>
     """
 
 
-def create_sample_features_table(row):
+def create_sample_features_table(
+    row
+):
 
     rows = []
 
     for key, label in SAMPLE_FEATURES:
 
-        value = row.get(key)
+        value = row.get(
+            key
+        )
 
         rows.append(
             f"""
             <tr>
-                <td>{html_escape(label)}</td>
-                <td>{format_number(value, 4)}</td>
+
                 <td>
-                    {html_escape(
-                        interpret_sample_feature(key, value)
+                    {html_escape(label)}
+                </td>
+
+                <td>
+                    {format_number(
+                        value,
+                        4
                     )}
                 </td>
+
+                <td>
+                    {html_escape(
+                        interpret_sample_feature(
+                            key,
+                            value
+                        )
+                    )}
+                </td>
+
             </tr>
             """
         )
 
     return f"""
     <table>
+
         <thead>
+
             <tr>
                 <th>Feature</th>
                 <th>Value</th>
                 <th>What it measures</th>
             </tr>
+
         </thead>
+
         <tbody>
+
             {''.join(rows)}
+
         </tbody>
+
     </table>
     """
 
 
-def create_word_feature_table(row):
+def create_word_feature_table(
+    row
+):
 
     rows = []
 
     for feature, label in WORD_FEATURES:
 
-        value = row.get(feature)
+        value = row.get(
+            feature
+        )
 
-        z_column = f"{feature}_z"
+        z_column = (
+            f"{feature}_z"
+        )
 
-        z = row.get(z_column)
+        z = row.get(
+            z_column
+        )
 
-        if not np.isfinite(safe_float(z)):
+        if not np.isfinite(
+            safe_float(z)
+        ):
 
-            # Some pipelines store the z-score in a generic
-            # column or only the main feature Z-score.
             main_feature = safe_text(
-                row.get("main_anomaly_feature"),
+                row.get(
+                    "main_anomaly_feature"
+                ),
                 "",
             )
 
             if main_feature == feature:
-                z = row.get("main_feature_z")
+
+                z = row.get(
+                    "main_feature_z"
+                )
 
         rows.append(
             f"""
             <tr>
-                <td>{html_escape(label)}</td>
-                <td>{format_number(value, 4)}</td>
-                <td>{format_number(z, 3)}</td>
+
+                <td>
+                    {html_escape(label)}
+                </td>
+
+                <td>
+                    {format_number(
+                        value,
+                        4
+                    )}
+                </td>
+
+                <td>
+                    {format_number(
+                        z,
+                        3
+                    )}
+                </td>
+
             </tr>
             """
         )
 
     return f"""
     <table class="small-table">
+
         <thead>
+
             <tr>
                 <th>Feature</th>
                 <th>Value</th>
                 <th>Robust Z-score</th>
             </tr>
+
         </thead>
+
         <tbody>
+
             {''.join(rows)}
+
         </tbody>
+
     </table>
     """
 
@@ -1602,34 +2441,48 @@ def create_word_section(
 ):
 
     word_id = safe_text(
-        row.get("word_id"),
+        row.get(
+            "word_id"
+        ),
         "",
     )
 
     word = safe_text(
-        row.get("resolved_word"),
+        row.get(
+            "resolved_word"
+        ),
         "Unknown",
     )
 
     score = safe_float(
-        row.get("word_anomaly_score")
+        row.get(
+            "word_anomaly_score"
+        )
     )
 
     main_feature = safe_text(
-        row.get("main_anomaly_feature"),
+        row.get(
+            "main_anomaly_feature"
+        ),
         "N/A",
     )
 
     z = safe_float(
-        row.get("main_feature_z")
+        row.get(
+            "main_feature_z"
+        )
     )
 
     activation = safe_float(
-        row.get("high_activation_percentage")
+        row.get(
+            "high_activation_percentage"
+        )
     )
 
     explanation = safe_text(
-        row.get("explanation"),
+        row.get(
+            "explanation"
+        ),
         "",
     )
 
@@ -1639,7 +2492,10 @@ def create_word_section(
             WORD_FEATURES
         ).get(
             main_feature,
-            main_feature.replace("_", " ").title(),
+            main_feature.replace(
+                "_",
+                " "
+            ).title(),
         )
 
         explanation = (
@@ -1658,7 +2514,9 @@ def create_word_section(
         word_id,
         word,
         rank,
-        row.get("original_crop"),
+        row.get(
+            "original_crop"
+        ),
         "original",
     )
 
@@ -1667,7 +2525,9 @@ def create_word_section(
         word_id,
         word,
         rank,
-        row.get("gradcam_image"),
+        row.get(
+            "gradcam_image"
+        ),
         "gradcam",
     )
 
@@ -1676,7 +2536,9 @@ def create_word_section(
         word_id,
         word,
         rank,
-        row.get("comparison_image"),
+        row.get(
+            "comparison_image"
+        ),
         "comparison",
     )
 
@@ -1688,62 +2550,117 @@ def create_word_section(
         </h3>
 
         <div class="word-meta">
-            <strong>Anomaly Score:</strong>
-            {format_number(score, 3)}
+
+            <strong>
+                Anomaly Score:
+            </strong>
+
+            {format_number(
+                score,
+                3
+            )}
+
             &nbsp;&nbsp;|&nbsp;&nbsp;
 
-            <strong>Word ID:</strong>
+            <strong>
+                Word ID:
+            </strong>
+
             {html_escape(word_id)}
+
             &nbsp;&nbsp;|&nbsp;&nbsp;
 
-            <strong>Main Feature:</strong>
+            <strong>
+                Main Feature:
+            </strong>
+
             {html_escape(main_feature)}
+
             &nbsp;&nbsp;|&nbsp;&nbsp;
 
-            <strong>Z-score:</strong>
-            {format_number(z, 3)}
+            <strong>
+                Z-score:
+            </strong>
+
+            {format_number(
+                z,
+                3
+            )}
+
         </div>
 
         <div class="word-images">
 
             <div>
-                <h4>Original Word</h4>
+
+                <h4>
+                    Original Word
+                </h4>
+
                 {image_html(
                     original_path,
                     f"Original word {word}"
                 )}
+
             </div>
 
             <div>
-                <h4>ResNet50 Grad-CAM</h4>
+
+                <h4>
+                    ResNet50 Grad-CAM
+                </h4>
+
                 {image_html(
                     gradcam_path,
                     f"Grad-CAM for {word}"
                 )}
+
             </div>
 
             <div>
-                <h4>Original + Grad-CAM</h4>
+
+                <h4>
+                    Original + Grad-CAM
+                </h4>
+
                 {image_html(
                     comparison_path,
                     f"Comparison for {word}"
                 )}
+
             </div>
 
         </div>
 
-        <h4>Word-Level Feature Measurements</h4>
+        <h4>
+            Word-Level Feature Measurements
+        </h4>
 
         {create_word_feature_table(row)}
 
         <p>
-            <strong>High-activation region:</strong>
-            {format_percent(activation, 2)}
+
+            <strong>
+                High-activation region:
+            </strong>
+
+            {format_percent(
+                activation,
+                2
+            )}
+
         </p>
 
         <p>
-            <strong>Interpretation:</strong>
-            {html_escape(explanation)}
+
+            <strong>
+                Interpretation:
+            </strong>
+
+            {html_escape(
+                explanation
+            )}
+
         </p>
 
     </div>
@@ -1769,53 +2686,83 @@ def generate_html(
     # --------------------------------------------------------
 
     resnet = safe_float(
-        row.get("resnet_anomaly_score")
+        row.get(
+            "resnet_anomaly_score"
+        )
     )
 
     if not np.isfinite(resnet):
+
         resnet = safe_float(
-            row.get("anomaly_score_0_100")
+            row.get(
+                "anomaly_score_0_100"
+            )
         )
 
     mean_word = safe_float(
-        row.get("mean_word_anomaly")
+        row.get(
+            "mean_word_anomaly"
+        )
     )
 
     max_word = safe_float(
-        row.get("maximum_word_anomaly")
+        row.get(
+            "maximum_word_anomaly"
+        )
     )
 
     top5 = safe_float(
-        row.get("top_5_mean_anomaly")
+        row.get(
+            "top_5_mean_anomaly"
+        )
     )
 
     combined = safe_float(
-        row.get("combined_anomaly_score")
+        row.get(
+            "combined_anomaly_score"
+        )
     )
 
-    if not np.isfinite(combined):
+    if not np.isfinite(
+        combined
+    ):
 
         rp = percentile_rank(
             resnet,
-            master.get("resnet_anomaly_score", []),
+            master.get(
+                "resnet_anomaly_score",
+                []
+            ),
         )
 
         wp = percentile_rank(
             mean_word,
-            word_summary.get("mean_word_anomaly", []),
+            word_summary.get(
+                "mean_word_anomaly",
+                []
+            ),
         )
 
-        if np.isfinite(rp) and np.isfinite(wp):
-            combined = 0.5 * rp + 0.5 * wp
+        if (
+            np.isfinite(rp)
+            and np.isfinite(wp)
+        ):
+
+            combined = (
+                0.5 * rp
+                + 0.5 * wp
+            )
 
     # --------------------------------------------------------
     # Percentiles
     # --------------------------------------------------------
 
-    percentiles = get_dataset_percentiles(
-        sample_id,
-        master,
-        word_summary,
+    percentiles = (
+        get_dataset_percentiles(
+            sample_id,
+            master,
+            word_summary,
+        )
     )
 
     agreement = get_agreement(
@@ -1827,8 +2774,10 @@ def generate_html(
     # Words
     # --------------------------------------------------------
 
-    explanation_df = load_word_explainability(
-        sample_id
+    explanation_df = (
+        load_word_explainability(
+            sample_id
+        )
     )
 
     top_words = get_top_words(
@@ -1855,16 +2804,20 @@ def generate_html(
     # Original image
     # --------------------------------------------------------
 
-    original_image = find_exact_sample_image(
-        sample_id
+    original_image = (
+        find_exact_sample_image(
+            sample_id
+        )
     )
 
     # --------------------------------------------------------
-    # Word count
+    # Word counts
     # --------------------------------------------------------
 
     form_word_count = safe_float(
-        row.get("num_words")
+        row.get(
+            "num_words"
+        )
     )
 
     valid_word_count = len(
@@ -1882,8 +2835,10 @@ def generate_html(
     # Word feature frequency
     # --------------------------------------------------------
 
-    feature_counts = dominant_word_features(
-        top_words
+    feature_counts = (
+        dominant_word_features(
+            top_words
+        )
     )
 
     feature_rows = []
@@ -1894,14 +2849,24 @@ def generate_html(
             WORD_FEATURES
         ).get(
             feature,
-            feature.replace("_", " ").title(),
+            feature.replace(
+                "_",
+                " "
+            ).title(),
         )
 
         feature_rows.append(
             f"""
             <tr>
-                <td>{html_escape(label)}</td>
-                <td>{count}</td>
+
+                <td>
+                    {html_escape(label)}
+                </td>
+
+                <td>
+                    {count}
+                </td>
+
             </tr>
             """
         )
@@ -1912,7 +2877,10 @@ def generate_html(
 
     word_sections = []
 
-    for rank, (_, word_row) in enumerate(
+    for rank, (
+        _,
+        word_row
+    ) in enumerate(
         top_words.iterrows(),
         start=1,
     ):
@@ -1945,16 +2913,18 @@ def generate_html(
     )
 
     # --------------------------------------------------------
-    # Missing explainability message
+    # Explainability status
     # --------------------------------------------------------
 
     if explanation_df.empty:
 
         explainability_status = """
         <div class="warning">
+
             Sample-specific word explainability data was not found.
             Word-level anomaly results are still shown, but Grad-CAM
             images have not been generated for this sample.
+
         </div>
         """
 
@@ -1962,18 +2932,29 @@ def generate_html(
 
         explainability_status = f"""
         <div class="success">
+
             Sample-specific word explainability data found.
+
             {explanation_count} explainability records are associated
-            with sample <strong>{html_escape(sample_id)}</strong>.
+            with sample
+            <strong>
+                {html_escape(sample_id)}
+            </strong>.
+
         </div>
         """
 
     # --------------------------------------------------------
-    # Percentile display
+    # Percentiles
     # --------------------------------------------------------
 
-    rp = percentiles["resnet_percentile"]
-    wp = percentiles["word_percentile"]
+    rp = percentiles[
+        "resnet_percentile"
+    ]
+
+    wp = percentiles[
+        "word_percentile"
+    ]
 
     # --------------------------------------------------------
     # HTML
@@ -1989,7 +2970,8 @@ def generate_html(
 <meta charset="UTF-8">
 
 <title>
-Explainable Handwriting Anomaly Report - {html_escape(sample_id)}
+Explainable Handwriting Anomaly Report -
+{html_escape(sample_id)}
 </title>
 
 <style>
@@ -2106,6 +3088,52 @@ section {{
     font-size: 18px;
 }}
 
+.attribution-highlight {{
+    background: #f8fafc;
+    border-left: 6px solid #7c3aed;
+    padding: 24px;
+    border-radius: 12px;
+    margin: 20px 0;
+}}
+
+.attribution-title {{
+    color: #64748b;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: bold;
+}}
+
+.attribution-highlight h3 {{
+    font-size: 25px;
+    margin: 8px 0 20px 0;
+}}
+
+.attribution-grid {{
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 15px;
+}}
+
+.attribution-grid > div {{
+    background: white;
+    padding: 15px;
+    border: 1px solid #e5e7eb;
+    border-radius: 9px;
+}}
+
+.attribution-grid span {{
+    display: block;
+    color: #64748b;
+    font-size: 12px;
+}}
+
+.attribution-grid strong {{
+    display: block;
+    margin-top: 5px;
+    font-size: 18px;
+}}
+
 .sample-image {{
     max-width: 90%;
     max-height: 800px;
@@ -2200,6 +3228,17 @@ th, td {{
     margin-top: 20px;
 }}
 
+.source-note {{
+    color: #64748b;
+    font-size: 12px;
+}}
+
+code {{
+    background: #f1f5f9;
+    padding: 3px 6px;
+    border-radius: 5px;
+}}
+
 .legend {{
     display: flex;
     gap: 20px;
@@ -2229,7 +3268,8 @@ footer {{
 
     .summary-grid,
     .evidence-grid,
-    .word-images {{
+    .word-images,
+    .attribution-grid {{
         grid-template-columns: 1fr;
     }}
 
@@ -2245,11 +3285,18 @@ footer {{
 
 <header>
 
-<h1>Explainable Handwriting Anomaly Detection Report</h1>
+<h1>
+Explainable Handwriting Anomaly Detection Report
+</h1>
 
 <p>
-<strong>Sample ID:</strong>
+
+<strong>
+Sample ID:
+</strong>
+
 {html_escape(sample_id)}
+
 </p>
 
 <p>
@@ -2276,7 +3323,9 @@ ResNet50 + OpenCV + Word-Level Anomaly Analysis + Grad-CAM
 
 <section>
 
-<h2>2. Executive Summary</h2>
+<h2>
+2. Executive Summary
+</h2>
 
 {create_summary_cards(
     resnet,
@@ -2289,7 +3338,9 @@ ResNet50 + OpenCV + Word-Level Anomaly Analysis + Grad-CAM
 
 <div class="note">
 
-<strong>Interpretation:</strong>
+<strong>
+Interpretation:
+</strong>
 
 The anomaly scores describe how unusual the handwriting appears
 relative to the reference distribution used by the research pipeline.
@@ -2308,11 +3359,17 @@ confidence scores, or medical diagnoses.
 
 <section>
 
-<h2>3. Original Handwriting Sample</h2>
+<h2>
+3. Original Handwriting Sample
+</h2>
 
 <p>
+
 Original handwriting sample:
-<strong>{html_escape(sample_id)}</strong>
+<strong>
+{html_escape(sample_id)}
+</strong>
+
 </p>
 
 {original_section}
@@ -2326,11 +3383,15 @@ Original handwriting sample:
 
 <section>
 
-<h2>4. Sample-Level OpenCV Measurements</h2>
+<h2>
+4. Sample-Level OpenCV Measurements
+</h2>
 
 <p>
+
 These measurements are extracted from the complete handwriting
 form. They are separate from the word-level anomaly features.
+
 </p>
 
 {create_sample_features_table(row)}
@@ -2342,9 +3403,20 @@ form. They are separate from the word-level anomaly features.
      SECTION 5
      ====================================================== -->
 
+{create_form_attribution_section(
+    sample_id
+)}
+
+
+<!-- ======================================================
+     SECTION 6
+     ====================================================== -->
+
 <section>
 
-<h2>5. Feature and Model Architecture</h2>
+<h2>
+6. Feature and Model Architecture
+</h2>
 
 <div style="
 background:#f8fafc;
@@ -2354,7 +3426,9 @@ text-align:center;
 font-weight:bold;
 ">
 
-<p>Handwriting Image</p>
+<p>
+Handwriting Image
+</p>
 
 <p>↓</p>
 
@@ -2406,42 +3480,61 @@ Anomaly Score
 </div>
 
 <p>
+
 The ResNet50 branch uses ImageNet-pretrained visual representations,
 while the OpenCV branch contributes handcrafted handwriting
 measurements. Their representations are fused for sample-level
 anomaly detection.
+
 </p>
 
 </section>
 
 
 <!-- ======================================================
-     SECTION 6
+     SECTION 7
      ====================================================== -->
 
 <section>
 
-<h2>6. Word-Level Anomaly Analysis</h2>
+<h2>
+7. Word-Level Anomaly Analysis
+</h2>
 
 <p>
+
 The form-level pipeline detected approximately
-<strong>{format_number(form_word_count, 0)}</strong> words,
-while the word-anomaly pipeline analyzed
-<strong>{valid_word_count}</strong> valid handwriting words.
+<strong>
+{format_number(
+    form_word_count,
+    0
+)}
+</strong>
+words, while the word-anomaly pipeline analyzed
+<strong>
+{valid_word_count}
+</strong>
+valid handwriting words.
+
 These counts can differ because the word-level pipeline filters
 invalid, punctuation, and unsuitable word regions before anomaly
 scoring.
+
 </p>
 
 <p>
+
 The word-level pipeline evaluates individual handwriting regions
 using robust feature-based anomaly scoring. Higher values indicate
 greater deviation from the reference word distribution.
+
 </p>
 
 {explainability_status}
 
-<h3>Dominant Word-Level Pattern</h3>
+<h3>
+Dominant Word-Level Pattern
+</h3>
 
 <p>
 {findings["word_pattern"]}
@@ -2454,37 +3547,29 @@ greater deviation from the reference word distribution.
 <table>
 
 <thead>
+
 <tr>
-<th>Recurring Feature</th>
-<th>Occurrences in Top 10</th>
+<th>
+Recurring Feature
+</th>
+
+<th>
+Occurrences in Top 10
+</th>
 </tr>
+
 </thead>
 
 <tbody>
-{''.join(feature_rows) if feature_rows else
+
+{''.join(feature_rows)
+if feature_rows
+else
 '<tr><td colspan="2">No dominant feature available.</td></tr>'}
+
 </tbody>
 
 </table>
-
-</section>
-
-
-<!-- ======================================================
-     SECTION 7
-     ====================================================== -->
-
-<section>
-
-<h2>7. Top 10 Anomalous Words</h2>
-
-<p>
-The following words are ranked by their word-level anomaly score
-within the selected sample.
-</p>
-
-{''.join(word_sections) if word_sections else
-'<p>No word-level anomaly records were available for this sample.</p>'}
 
 </section>
 
@@ -2495,45 +3580,21 @@ within the selected sample.
 
 <section>
 
-<h2>8. ResNet50 and Grad-CAM Explanation</h2>
+<h2>
+8. Top 10 Anomalous Words
+</h2>
 
 <p>
-Grad-CAM highlights image regions that contribute strongly to the
-ResNet50 handwriting representation. It provides visual localization
-of influential regions; it should not be interpreted as a direct
-gradient explanation of the final anomaly score.
+
+The following words are ranked by their word-level anomaly score
+within the selected sample.
+
 </p>
 
-<h3>Heatmap Interpretation</h3>
-
-<div class="legend">
-
-<div class="legend-item">
-<div class="legend-box" style="background:#0000ff;"></div>
-Blue → lower activation
-</div>
-
-<div class="legend-item">
-<div class="legend-box" style="background:#00ff00;"></div>
-Green → moderate activation
-</div>
-
-<div class="legend-item">
-<div class="legend-box" style="background:#ffff00;"></div>
-Yellow → stronger activation
-</div>
-
-<div class="legend-item">
-<div class="legend-box" style="background:#ff0000;"></div>
-Red → highest activation
-</div>
-
-</div>
-
-<p>
-The visualizations shown in this report are restricted to the exact
-sample and word IDs requested for <strong>{html_escape(sample_id)}</strong>.
-</p>
+{''.join(word_sections)
+if word_sections
+else
+'<p>No word-level anomaly records were available for this sample.</p>'}
 
 </section>
 
@@ -2544,29 +3605,140 @@ sample and word IDs requested for <strong>{html_escape(sample_id)}</strong>.
 
 <section>
 
-<h2>9. Global vs Local Evidence</h2>
+<h2>
+9. ResNet50 and Grad-CAM Explanation
+</h2>
 
 <p>
+
+Grad-CAM highlights image regions that contribute strongly to the
+ResNet50 handwriting representation. It provides visual localization
+of influential regions; it should not be interpreted as a direct
+gradient explanation of the final anomaly score.
+
+</p>
+
+<h3>
+Heatmap Interpretation
+</h3>
+
+<div class="legend">
+
+<div class="legend-item">
+
+<div
+class="legend-box"
+style="background:#0000ff;"
+></div>
+
+Blue → lower activation
+
+</div>
+
+<div class="legend-item">
+
+<div
+class="legend-box"
+style="background:#00ff00;"
+></div>
+
+Green → moderate activation
+
+</div>
+
+<div class="legend-item">
+
+<div
+class="legend-box"
+style="background:#ffff00;"
+></div>
+
+Yellow → stronger activation
+
+</div>
+
+<div class="legend-item">
+
+<div
+class="legend-box"
+style="background:#ff0000;"
+></div>
+
+Red → highest activation
+
+</div>
+
+</div>
+
+<p>
+
+The visualizations shown in this report are restricted to the exact
+sample and word IDs requested for
+<strong>
+{html_escape(sample_id)}
+</strong>.
+
+</p>
+
+</section>
+
+
+<!-- ======================================================
+     SECTION 10
+     ====================================================== -->
+
+<section>
+
+<h2>
+10. Global vs Local Evidence
+</h2>
+
+<p>
+
 The dataset-level comparison below provides context for the relationship
 between form-level ResNet50 anomaly scores and aggregate word-level
 anomaly measurements.
+
 </p>
 
 {chart_section}
 
 <p>
-<strong>ResNet percentile:</strong>
-{format_percent(rp, 1)}
+
+<strong>
+ResNet percentile:
+</strong>
+
+{format_percent(
+    rp,
+    1
+)}
+
 </p>
 
 <p>
-<strong>Word anomaly percentile:</strong>
-{format_percent(wp, 1)}
+
+<strong>
+Word anomaly percentile:
+</strong>
+
+{format_percent(
+    wp,
+    1
+)}
+
 </p>
 
 <p>
-<strong>Agreement category:</strong>
-{html_escape(agreement)}
+
+<strong>
+Agreement category:
+</strong>
+
+{html_escape(
+    agreement
+)}
+
 </p>
 
 <p>
@@ -2575,7 +3747,9 @@ anomaly measurements.
 
 <div class="note">
 
-<strong>Combined research score:</strong>
+<strong>
+Combined research score:
+</strong>
 
 When available, this score is calculated using a 50/50
 percentile-based research heuristic combining the form-level
@@ -2590,41 +3764,58 @@ or diagnostic measure.
 
 
 <!-- ======================================================
-     SECTION 10
+     SECTION 11
      ====================================================== -->
 
 <section>
 
-<h2>10. Sample-Specific Findings and Interpretation</h2>
+<h2>
+11. Sample-Specific Findings and Interpretation
+</h2>
 
-<h3>What is unusual?</h3>
+<h3>
+What is unusual?
+</h3>
 
 <p>
 {findings["finding"]}
 </p>
 
-<h3>Where is the evidence?</h3>
+<h3>
+Where is the evidence?
+</h3>
 
 <p>
 {findings["word_pattern"]}
 </p>
 
-<h3>How strong is the local evidence?</h3>
+<h3>
+How strong is the local evidence?
+</h3>
 
 <p>
 {findings["z_pattern"]}
 </p>
 
-<h3>How do the two pipelines agree?</h3>
+<h3>
+How do the two pipelines agree?
+</h3>
 
 <p>
+
 The agreement category for this sample is
-<strong>{html_escape(agreement)}</strong>.
+<strong>
+{html_escape(agreement)}
+</strong>.
+
 This category is dataset-relative and describes agreement between
 two anomaly-detection approaches rather than a clinical condition.
+
 </p>
 
-<h3>What this sample tells us</h3>
+<h3>
+What this sample tells us
+</h3>
 
 <p>
 {findings["what_it_tells"]}
@@ -2634,12 +3825,14 @@ two anomaly-detection approaches rather than a clinical condition.
 
 
 <!-- ======================================================
-     SECTION 11
+     SECTION 12
      ====================================================== -->
 
 <section>
 
-<h2>11. Limitations</h2>
+<h2>
+12. Limitations
+</h2>
 
 <ul>
 
@@ -2665,6 +3858,11 @@ final anomaly score.
 </li>
 
 <li>
+The form-level feature attribution is a controlled sensitivity
+analysis and should not be interpreted as causal attribution.
+</li>
+
+<li>
 The combined score is a research heuristic and requires validation
 on clinically labelled handwriting data before any diagnostic
 interpretation.
@@ -2676,16 +3874,20 @@ interpretation.
 
 
 <!-- ======================================================
-     SECTION 12
+     SECTION 13
      ====================================================== -->
 
 <section>
 
-<h2>12. Sample-Specific Conclusion</h2>
+<h2>
+13. Sample-Specific Conclusion
+</h2>
 
 <p>
 
-For <strong>{html_escape(sample_id)}</strong>,
+For <strong>
+{html_escape(sample_id)}
+</strong>,
 the evidence indicates:
 
 </p>
@@ -2693,30 +3895,69 @@ the evidence indicates:
 <ul>
 
 <li>
-<strong>Global evidence:</strong>
-{format_number(resnet, 2)}
-</li>
 
-<li>
-<strong>Mean local word anomaly:</strong>
-{format_number(mean_word, 3)}
-</li>
+<strong>
+Global evidence:
+</strong>
 
-<li>
-<strong>Strongest word anomaly:</strong>
-{format_number(max_word, 3)}
-</li>
-
-<li>
-<strong>Agreement:</strong>
-{html_escape(agreement)}
-</li>
-
-<li>
-<strong>Dominant local pattern:</strong>
-{html_escape(
-    findings["dominant_feature"] or "Not available"
+{format_number(
+    resnet,
+    2
 )}
+
+</li>
+
+<li>
+
+<strong>
+Mean local word anomaly:
+</strong>
+
+{format_number(
+    mean_word,
+    3
+)}
+
+</li>
+
+<li>
+
+<strong>
+Strongest word anomaly:
+</strong>
+
+{format_number(
+    max_word,
+    3
+)}
+
+</li>
+
+<li>
+
+<strong>
+Agreement:
+</strong>
+
+{html_escape(
+    agreement
+)}
+
+</li>
+
+<li>
+
+<strong>
+Dominant local pattern:
+</strong>
+
+{html_escape(
+    findings[
+        "dominant_feature"
+    ]
+    or "Not available"
+)}
+
 </li>
 
 </ul>
@@ -2726,12 +3967,16 @@ the evidence indicates:
 </p>
 
 <p>
-This report therefore provides a sample-specific combination of
-global handwriting representation, handcrafted measurements,
-local word-level anomaly evidence, and visual explanation.
+
+This report provides a sample-specific combination of global
+handwriting representation, handcrafted measurements, form-level
+feature sensitivity, local word-level anomaly evidence, and visual
+explanation.
+
 The system is intended as an explainable handwriting anomaly-analysis
 framework and research tool, not as a standalone clinical diagnostic
 system.
+
 </p>
 
 </section>
@@ -2740,8 +3985,10 @@ system.
 <footer>
 
 <strong>
-Explainable Handwriting Anomaly Detection using ResNet50 and
-OpenCV Features
+
+Explainable Handwriting Anomaly Detection using
+ResNet50 and OpenCV Features
+
 </strong>
 
 <br>
@@ -2766,7 +4013,10 @@ Anomaly Detection + Word-Level Analysis + Grad-CAM
 def main():
 
     parser = argparse.ArgumentParser(
-        description="Generate a sample-specific handwriting anomaly report."
+        description=(
+            "Generate a sample-specific "
+            "handwriting anomaly report."
+        )
     )
 
     parser.add_argument(
@@ -2782,9 +4032,16 @@ def main():
     sample_id = args.sample_id.strip()
 
     print("=" * 70)
-    print("EXPLAINABLE HANDWRITING ANOMALY REPORT")
+    print(
+        "EXPLAINABLE HANDWRITING "
+        "ANOMALY REPORT"
+    )
     print("=" * 70)
-    print(f"Sample ID: {sample_id}")
+
+    print(
+        f"Sample ID: {sample_id}"
+    )
+
     print()
 
     (
@@ -2811,11 +4068,67 @@ def main():
     if sample_row.empty:
 
         print(
-            f"ERROR: Sample '{sample_id}' was not found "
-            "in the available metadata/anomaly files."
+            f"ERROR: Sample '{sample_id}' "
+            "was not found in the available "
+            "metadata/anomaly files."
         )
 
         return
+
+    # --------------------------------------------------------
+    # Check attribution file.
+    # --------------------------------------------------------
+
+    attribution_df, attribution_file = (
+        load_form_feature_attribution(
+            sample_id
+        )
+    )
+
+    if attribution_df.empty:
+
+        print(
+            "WARNING:"
+        )
+
+        print(
+            "Form-level attribution file was "
+            "not found or could not be loaded."
+        )
+
+        print(
+            f"Expected:"
+        )
+
+        print(
+            attribution_file
+        )
+
+        print()
+
+        print(
+            "The report will still be generated, "
+            "but Section 5 will show a warning."
+        )
+
+    else:
+
+        top_feature = safe_text(
+            attribution_df.iloc[0][
+                "feature"
+            ],
+            "N/A"
+        )
+
+        print(
+            "Form-level attribution loaded."
+        )
+
+        print(
+            f"Top feature: {top_feature}"
+        )
+
+        print()
 
     # --------------------------------------------------------
     # Generate HTML.
@@ -2841,8 +4154,9 @@ def main():
     )
 
     output_file = (
-        OUTPUT_DIR /
-        f"{safe_filename(sample_id)}_final_report.html"
+        OUTPUT_DIR
+        / f"{safe_filename(sample_id)}"
+        "_final_report.html"
     )
 
     output_file.write_text(
@@ -2851,10 +4165,19 @@ def main():
     )
 
     print()
-    print("DONE.")
+    print(
+        "DONE."
+    )
+
     print()
-    print(f"Report generated:")
-    print(output_file)
+    print(
+        "Report generated:"
+    )
+
+    print(
+        output_file
+    )
+
     print()
     print("=" * 70)
 
