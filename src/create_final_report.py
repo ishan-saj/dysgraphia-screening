@@ -13,6 +13,7 @@ import pandas as pd
 # ============================================================
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 DATA_DIR = PROJECT_ROOT / "data"
 METADATA_DIR = DATA_DIR / "metadata"
 
@@ -25,6 +26,7 @@ WORDS_METADATA_FILE = METADATA_DIR / "words_metadata.csv"
 
 OUTPUT_DIR = METADATA_DIR / "final_reports"
 
+# Existing comparison chart.
 COMPARISON_CHART = METADATA_DIR / "resnet_vs_word_anomaly.png"
 
 
@@ -61,7 +63,7 @@ WORD_FEATURES = [
     ("lower_ink_ratio", "Lower Ink Ratio"),
 ]
 
-FORM_ATTRIBUTION_FEATURES = [
+FORM_LOF_FEATURES = [
     ("skew", "Skew"),
     ("baseline_deviation", "Baseline Deviation"),
     ("word_spacing_cv", "Word Spacing CV"),
@@ -146,6 +148,20 @@ def html_escape(value):
     return html.escape(safe_text(value, ""))
 
 
+def feature_label(feature, feature_list):
+    feature = safe_text(feature, "")
+
+    if not feature:
+        return "N/A"
+
+    mapping = dict(feature_list)
+
+    return mapping.get(
+        feature,
+        feature.replace("_", " ").title(),
+    )
+
+
 # ============================================================
 # IMAGE HELPERS
 # ============================================================
@@ -160,14 +176,12 @@ def image_to_base64(path):
         if not path.exists() or not path.is_file():
             return None
 
-        suffix = path.suffix.lower()
-
         mime = {
             ".png": "image/png",
             ".jpg": "image/jpeg",
             ".jpeg": "image/jpeg",
             ".webp": "image/webp",
-        }.get(suffix)
+        }.get(path.suffix.lower())
 
         if not mime:
             return None
@@ -190,22 +204,21 @@ def resolve_project_path(value):
         path = Path(str(value))
 
         if path.is_absolute():
-            return path
+            return path if path.exists() else None
 
-        candidate = PROJECT_ROOT / path
+        candidates = [
+            PROJECT_ROOT / path,
+            METADATA_DIR / path,
+        ]
 
-        if candidate.exists():
-            return candidate
-
-        candidate = METADATA_DIR / path
-
-        if candidate.exists():
-            return candidate
-
-        return None
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
 
     except Exception:
-        return None
+        pass
+
+    return None
 
 
 def find_exact_sample_image(sample_id):
@@ -215,9 +228,14 @@ def find_exact_sample_image(sample_id):
     if not sample_id:
         return None
 
+    # --------------------------------------------------------
+    # Metadata lookup
+    # --------------------------------------------------------
+
     if METADATA_ALL_FILE.exists():
 
         try:
+
             metadata = pd.read_csv(
                 METADATA_ALL_FILE
             )
@@ -227,7 +245,7 @@ def find_exact_sample_image(sample_id):
             for col in [
                 "sample_id",
                 "form_id",
-                "id"
+                "id",
             ]:
 
                 if col in metadata.columns:
@@ -260,11 +278,15 @@ def find_exact_sample_image(sample_id):
                                 row[col]
                             )
 
-                            if path and path.exists():
+                            if path:
                                 return path
 
         except Exception:
             pass
+
+    # --------------------------------------------------------
+    # Common IAM locations
+    # --------------------------------------------------------
 
     possible = [
         DATA_DIR / "raw" / "IAM" / "images" / f"{sample_id}.png",
@@ -290,7 +312,7 @@ def find_exact_sample_image(sample_id):
             ".png",
             ".jpg",
             ".jpeg",
-            ".bmp"
+            ".bmp",
         ]:
 
             matches = list(
@@ -306,15 +328,14 @@ def find_exact_sample_image(sample_id):
 
 
 # ============================================================
-# SAMPLE FOLDER / WORD IMAGE RESOLUTION
+# WORD EXPLAINABILITY PATHS
 # ============================================================
 
-def get_sample_explainability_folder(
-    sample_id
-):
+def get_sample_explainability_folder(sample_id):
+
     return (
         METADATA_DIR
-        / f"{sample_id}_word_explainability"
+        / f"{safe_filename(sample_id)}_word_explainability"
     )
 
 
@@ -338,51 +359,50 @@ def resolve_word_image(
     if not folder.exists():
         return None
 
+    # --------------------------------------------------------
+    # Supplied path
+    # --------------------------------------------------------
+
     if supplied_path:
 
-        supplied_path = str(
-            supplied_path
-        ).strip()
+        candidate = Path(
+            str(supplied_path).strip()
+        )
 
-        if supplied_path:
+        candidates = []
 
-            candidate = Path(
-                supplied_path
-            )
+        if candidate.is_absolute():
+            candidates.append(candidate)
 
-            candidates = []
+        else:
 
-            if candidate.is_absolute():
-                candidates.append(candidate)
+            candidates.extend([
+                PROJECT_ROOT / candidate,
+                METADATA_DIR / candidate,
+                folder / candidate,
+            ])
 
-            else:
-                candidates.extend([
-                    PROJECT_ROOT / candidate,
-                    METADATA_DIR / candidate,
-                    folder / candidate,
-                ])
+        for candidate in candidates:
 
-            for candidate in candidates:
+            try:
 
-                try:
+                candidate = candidate.resolve()
+                folder_resolved = folder.resolve()
 
-                    candidate = candidate.resolve()
+                if (
+                    candidate.exists()
+                    and folder_resolved in candidate.parents
+                ):
+                    return candidate
 
-                    folder_resolved = (
-                        folder.resolve()
-                    )
-
-                    if (
-                        candidate.exists()
-                        and folder_resolved
-                        in candidate.parents
-                    ):
-                        return candidate
-
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
     suffix = f"_{image_type}.png"
+
+    # --------------------------------------------------------
+    # Word ID
+    # --------------------------------------------------------
 
     if word_id:
 
@@ -404,19 +424,19 @@ def resolve_word_image(
         if matches:
             return matches[0]
 
+    # --------------------------------------------------------
+    # Rank
+    # --------------------------------------------------------
+
     try:
 
-        rank_number = int(
-            float(rank)
-        )
+        rank_number = int(float(rank))
 
-        rank_prefix = (
-            f"{rank_number:02d}_"
-        )
+        prefix = f"{rank_number:02d}_"
 
         matches = list(
             folder.glob(
-                f"{rank_prefix}*{suffix}"
+                f"{prefix}*{suffix}"
             )
         )
 
@@ -426,14 +446,13 @@ def resolve_word_image(
     except Exception:
         pass
 
-    clean_word = safe_filename(
-        word
-    )
+    # --------------------------------------------------------
+    # Word text
+    # --------------------------------------------------------
 
-    if (
-        clean_word
-        and clean_word != "unknown"
-    ):
+    clean_word = safe_filename(word)
+
+    if clean_word and clean_word != "unknown":
 
         matches = list(
             folder.glob(
@@ -471,8 +490,7 @@ def load_csv(path):
     except Exception as exc:
 
         print(
-            f"WARNING: Could not read "
-            f"{path}: {exc}"
+            f"WARNING: Could not read {path}: {exc}"
         )
 
         return pd.DataFrame()
@@ -480,37 +498,13 @@ def load_csv(path):
 
 def load_data():
 
-    master = load_csv(
-        MASTER_FILE
-    )
-
-    anomaly = load_csv(
-        ANOMALY_FILE
-    )
-
-    word_anomaly = load_csv(
-        WORD_ANOMALY_FILE
-    )
-
-    word_summary = load_csv(
-        WORD_SUMMARY_FILE
-    )
-
-    metadata = load_csv(
-        METADATA_ALL_FILE
-    )
-
-    words_metadata = load_csv(
-        WORDS_METADATA_FILE
-    )
-
     return (
-        master,
-        anomaly,
-        word_anomaly,
-        word_summary,
-        metadata,
-        words_metadata,
+        load_csv(MASTER_FILE),
+        load_csv(ANOMALY_FILE),
+        load_csv(WORD_ANOMALY_FILE),
+        load_csv(WORD_SUMMARY_FILE),
+        load_csv(METADATA_ALL_FILE),
+        load_csv(WORDS_METADATA_FILE),
     )
 
 
@@ -521,7 +515,7 @@ def load_data():
 def get_row_from_file(
     df,
     sample_id,
-    id_columns
+    id_columns,
 ):
 
     if df.empty:
@@ -555,118 +549,94 @@ def get_sample_row(
 
     row = {}
 
-    metadata_row = get_row_from_file(
-        metadata,
-        sample_id,
-        [
-            "sample_id",
-            "form_id",
-            "id",
-        ],
-    )
+    sources = [
+        (
+            metadata,
+            [
+                "sample_id",
+                "form_id",
+                "id",
+            ],
+        ),
+        (
+            anomaly,
+            [
+                "sample_id",
+                "form_id",
+                "id",
+            ],
+        ),
+        (
+            word_summary,
+            [
+                "sample_id",
+                "form_id",
+                "id",
+            ],
+        ),
+        (
+            master,
+            [
+                "sample_id",
+                "form_id",
+                "id",
+            ],
+        ),
+    ]
 
-    anomaly_row = get_row_from_file(
-        anomaly,
-        sample_id,
-        [
-            "sample_id",
-            "form_id",
-            "id",
-        ],
-    )
+    for df, id_columns in sources:
 
-    word_summary_row = get_row_from_file(
-        word_summary,
-        sample_id,
-        [
-            "sample_id",
-            "form_id",
-            "id",
-        ],
-    )
-
-    master_row = get_row_from_file(
-        master,
-        sample_id,
-        [
-            "sample_id",
-            "form_id",
-            "id",
-        ],
-    )
-
-    if metadata_row is not None:
-
-        row.update(
-            metadata_row.to_dict()
+        source_row = get_row_from_file(
+            df,
+            sample_id,
+            id_columns,
         )
 
-    if anomaly_row is not None:
-
-        for key, value in (
-            anomaly_row
-            .to_dict()
-            .items()
-        ):
-
-            row[key] = value
-
-    if word_summary_row is not None:
-
-        for key, value in (
-            word_summary_row
-            .to_dict()
-            .items()
-        ):
-
-            row[key] = value
-
-    if master_row is not None:
-
-        for key, value in (
-            master_row
-            .to_dict()
-            .items()
-        ):
-
-            row[key] = value
+        if source_row is not None:
+            row.update(
+                source_row.to_dict()
+            )
 
     return pd.Series(row)
 
 
 # ============================================================
-# FORM-LEVEL FEATURE ATTRIBUTION
+# LOF FEATURE SENSITIVITY
 # ============================================================
 
-def load_form_feature_attribution(
-    sample_id
-):
+def load_lof_feature_sensitivity(sample_id):
 
-    attribution_file = (
+    sensitivity_file = (
         METADATA_DIR
         / f"{safe_filename(sample_id)}"
-        "_form_feature_attribution.csv"
+        "_lof_feature_sensitivity.csv"
     )
 
-    if not attribution_file.exists():
+    if not sensitivity_file.exists():
 
         return (
             pd.DataFrame(),
-            attribution_file
+            sensitivity_file,
         )
 
     try:
 
         df = pd.read_csv(
-            attribution_file
+            sensitivity_file
         )
+
+        # ----------------------------------------------------
+        # CURRENT CSV SCHEMA
+        # ----------------------------------------------------
 
         required_columns = [
             "feature",
             "original_value",
             "reference_value",
-            "embedding_change",
-            "relative_contribution_pct",
+            "original_lof_score",
+            "lof_score_after_replacement",
+            "lof_score_change",
+            "relative_lof_sensitivity_pct",
         ]
 
         missing = [
@@ -678,458 +648,596 @@ def load_form_feature_attribution(
         if missing:
 
             print(
-                "WARNING: Form attribution file "
+                "WARNING: LOF sensitivity file "
                 f"is missing columns: {missing}"
             )
 
             return (
                 pd.DataFrame(),
-                attribution_file
+                sensitivity_file,
             )
 
-        # Clean numeric fields.
+        # ----------------------------------------------------
+        # NUMERIC CONVERSION
+        # ----------------------------------------------------
 
-        for col in [
+        numeric_columns = [
             "original_value",
             "reference_value",
-            "embedding_change",
-            "relative_contribution_pct",
-        ]:
+            "original_lof_score",
+            "lof_score_after_replacement",
+            "lof_score_change",
+            "relative_lof_sensitivity_pct",
+        ]
+
+        for col in numeric_columns:
 
             df[col] = pd.to_numeric(
                 df[col],
-                errors="coerce"
+                errors="coerce",
             )
 
         df = df.dropna(
             subset=[
-                "embedding_change",
-                "relative_contribution_pct",
+                "lof_score_change",
+                "relative_lof_sensitivity_pct",
             ]
+        ).copy()
+
+        if df.empty:
+            return (
+                df,
+                sensitivity_file,
+            )
+
+        # ----------------------------------------------------
+        # ABSOLUTE LOF CHANGE
+        #
+        # Use the CSV value if present.
+        # Otherwise calculate it.
+        # ----------------------------------------------------
+
+        if "absolute_lof_change" in df.columns:
+
+            df["absolute_lof_change"] = pd.to_numeric(
+                df["absolute_lof_change"],
+                errors="coerce",
+            )
+
+        else:
+
+            df["absolute_lof_change"] = (
+                df["lof_score_change"].abs()
+            )
+
+        # Fill any missing absolute values safely.
+
+        df["absolute_lof_change"] = (
+            df["absolute_lof_change"]
+            .fillna(
+                df["lof_score_change"].abs()
+            )
         )
 
-        # Always rank by actual measured
-        # embedding change.
+        # ----------------------------------------------------
+        # SORT BY ACTUAL MEASURED LOF EFFECT
+        # ----------------------------------------------------
 
         df = df.sort_values(
-            "embedding_change",
-            ascending=False
+            "absolute_lof_change",
+            ascending=False,
         ).reset_index(
             drop=True
         )
 
-        df["rank"] = np.arange(
+        df["report_rank"] = np.arange(
             1,
-            len(df) + 1
+            len(df) + 1,
         )
 
         return (
             df,
-            attribution_file
+            sensitivity_file,
         )
 
     except Exception as exc:
 
         print(
             f"WARNING: Could not load "
-            f"{attribution_file}: {exc}"
+            f"{sensitivity_file}: {exc}"
         )
 
         return (
             pd.DataFrame(),
-            attribution_file
+            sensitivity_file,
         )
 
 
-def create_form_attribution_section(
-    sample_id
+# ============================================================
+# LOF SENSITIVITY SECTION
+# ============================================================
+
+def create_lof_sensitivity_section(
+    sample_id,
+    sensitivity_df=None,
 ):
 
-    attribution_df, attribution_file = (
-        load_form_feature_attribution(
-            sample_id
-        )
-    )
+    if sensitivity_df is None:
 
-    if attribution_df.empty:
+        sensitivity_df, sensitivity_file = (
+            load_lof_feature_sensitivity(
+                sample_id
+            )
+        )
+
+    else:
+
+        sensitivity_file = (
+            METADATA_DIR
+            / f"{safe_filename(sample_id)}"
+            "_lof_feature_sensitivity.csv"
+        )
+
+    if sensitivity_df.empty:
 
         return f"""
-        <section>
+        <section id="lof-sensitivity">
 
-        <h2>5. Form-Level Feature Attribution</h2>
+            <div class="section-header">
+                <div class="section-number">05</div>
+                <div>
+                    <div class="eyebrow">Feature Sensitivity</div>
+                    <h2>LOF Feature Sensitivity Analysis</h2>
+                </div>
+            </div>
 
-        <div class="warning">
+            <div class="warning">
+                <div class="status-icon">!</div>
+                <div>
+                    <strong>
+                        LOF feature sensitivity data not available.
+                    </strong>
 
-        <strong>
-        Form-level attribution not available.
-        </strong>
+                    <p>
+                        No valid sample-specific LOF sensitivity
+                        records were available for
+                        <strong>{html_escape(sample_id)}</strong>.
+                    </p>
 
-        <p>
-        No sample-specific attribution file was found for
-        <strong>{html_escape(sample_id)}</strong>.
-        </p>
-
-        <p>
-        Generate it using:
-        </p>
-
-        <code>
-        python src/form_feature_attribution.py
-        {html_escape(sample_id)}
-        </code>
-
-        </div>
+                    <p>
+                        Expected file:
+                        <code>{html_escape(sensitivity_file.name)}</code>
+                    </p>
+                </div>
+            </div>
 
         </section>
         """
 
-    # --------------------------------------------------------
-    # Top feature
-    # --------------------------------------------------------
-
-    top = attribution_df.iloc[0]
+    top = sensitivity_df.iloc[0]
 
     top_feature = safe_text(
-        top["feature"],
-        "N/A"
+        top.get("feature"),
+        "N/A",
     )
 
-    top_label = dict(
-        FORM_ATTRIBUTION_FEATURES
-    ).get(
+    top_label = feature_label(
         top_feature,
-        top_feature.replace(
-            "_",
-            " "
-        ).title(),
+        FORM_LOF_FEATURES,
     )
 
     top_original = safe_float(
-        top["original_value"]
+        top.get("original_value")
     )
 
     top_reference = safe_float(
-        top["reference_value"]
+        top.get("reference_value")
     )
 
-    top_change = safe_float(
-        top["embedding_change"]
+    top_lof_original = safe_float(
+        top.get("original_lof_score")
     )
 
-    top_contribution = safe_float(
-        top["relative_contribution_pct"]
+    top_lof_modified = safe_float(
+        top.get(
+            "lof_score_after_replacement"
+        )
+    )
+
+    top_lof_change = safe_float(
+        top.get("lof_score_change")
+    )
+
+    top_sensitivity = safe_float(
+        top.get(
+            "relative_lof_sensitivity_pct"
+        )
+    )
+
+    direction_text = (
+        "decreased"
+        if top_lof_change < 0
+        else "increased"
+        if top_lof_change > 0
+        else "did not change"
+    )
+
+    direction_class = (
+        "negative"
+        if top_lof_change < 0
+        else "positive"
+        if top_lof_change > 0
+        else "neutral"
     )
 
     # --------------------------------------------------------
-    # Table
+    # TABLE
     # --------------------------------------------------------
 
     table_rows = []
 
-    for _, item in attribution_df.iterrows():
+    for _, item in sensitivity_df.iterrows():
 
         feature = safe_text(
-            item["feature"],
-            "N/A"
+            item.get("feature"),
+            "N/A",
         )
 
-        label = dict(
-            FORM_ATTRIBUTION_FEATURES
-        ).get(
+        label = feature_label(
             feature,
-            feature.replace(
-                "_",
-                " "
-            ).title(),
+            FORM_LOF_FEATURES,
         )
 
         original = safe_float(
-            item["original_value"]
+            item.get("original_value")
         )
 
         reference = safe_float(
-            item["reference_value"]
+            item.get("reference_value")
         )
 
-        change = safe_float(
-            item["embedding_change"]
+        lof_original = safe_float(
+            item.get("original_lof_score")
         )
 
-        contribution = safe_float(
-            item[
-                "relative_contribution_pct"
-            ]
+        lof_modified = safe_float(
+            item.get(
+                "lof_score_after_replacement"
+            )
         )
+
+        lof_change = safe_float(
+            item.get("lof_score_change")
+        )
+
+        sensitivity = safe_float(
+            item.get(
+                "relative_lof_sensitivity_pct"
+            )
+        )
+
+        if lof_change < 0:
+            direction = "Decreased"
+            direction_class = "negative"
+
+        elif lof_change > 0:
+            direction = "Increased"
+            direction_class = "positive"
+
+        else:
+            direction = "No change"
+            direction_class = "neutral"
 
         table_rows.append(
             f"""
             <tr>
+
+                <td class="rank-cell">
+                    <span class="rank-pill">
+                        {int(item["report_rank"])}
+                    </span>
+                </td>
+
+                <td>
+                    <strong>{html_escape(label)}</strong>
+                    <span class="feature-code">
+                        {html_escape(feature)}
+                    </span>
+                </td>
+
+                <td>
+                    {format_number(original, 5)}
+                </td>
+
+                <td>
+                    {format_number(reference, 5)}
+                </td>
+
+                <td>
+                    {format_number(lof_original, 6)}
+                </td>
+
+                <td>
+                    {format_number(lof_modified, 6)}
+                </td>
+
                 <td>
                     <strong>
-                    {int(item["rank"])}
+                        {format_number(lof_change, 6)}
                     </strong>
                 </td>
 
                 <td>
-                    {html_escape(label)}
-                </td>
-
-                <td>
-                    {format_number(
-                        original,
-                        5
-                    )}
-                </td>
-
-                <td>
-                    {format_number(
-                        reference,
-                        5
-                    )}
-                </td>
-
-                <td>
-                    {format_number(
-                        change,
-                        6
-                    )}
+                    <span class="direction {direction_class}">
+                        {direction}
+                    </span>
                 </td>
 
                 <td>
                     <strong>
-                    {format_percent(
-                        contribution,
-                        2
-                    )}
+                        {format_percent(sensitivity, 2)}
                     </strong>
                 </td>
+
             </tr>
             """
         )
 
     # --------------------------------------------------------
-    # Sample-specific interpretation
+    # SECOND FEATURE
     # --------------------------------------------------------
 
     second_text = ""
 
-    if len(attribution_df) >= 2:
+    if len(sensitivity_df) >= 2:
 
-        second = attribution_df.iloc[1]
+        second = sensitivity_df.iloc[1]
 
         second_feature = safe_text(
-            second["feature"],
-            "N/A"
+            second.get("feature"),
+            "N/A",
         )
 
-        second_label = dict(
-            FORM_ATTRIBUTION_FEATURES
-        ).get(
+        second_label = feature_label(
             second_feature,
-            second_feature.replace(
-                "_",
-                " "
-            ).title(),
+            FORM_LOF_FEATURES,
         )
 
-        second_contribution = (
-            safe_float(
-                second[
-                    "relative_contribution_pct"
-                ]
+        second_change = safe_float(
+            second.get(
+                "lof_score_change"
+            )
+        )
+
+        second_sensitivity = safe_float(
+            second.get(
+                "relative_lof_sensitivity_pct"
             )
         )
 
         second_text = (
-            f"The next most influential feature was "
+            f"The second-largest measured LOF sensitivity was "
             f"<strong>{html_escape(second_label)}</strong>, "
-            f"accounting for approximately "
-            f"<strong>{format_percent(second_contribution, 2)}</strong> "
-            "of the measured embedding change."
+            f"with an LOF-score change of "
+            f"<strong>{format_number(second_change, 6)}</strong> "
+            f"and a relative sensitivity of "
+            f"<strong>{format_percent(second_sensitivity, 2)}</strong>."
         )
 
     # --------------------------------------------------------
-    # Determine whether top few are close
+    # INTERPRETATION
     # --------------------------------------------------------
 
-    close_top_features = False
+    if top_lof_change < 0:
 
-    if len(attribution_df) >= 3:
-
-        first_pct = safe_float(
-            attribution_df.iloc[0][
-                "relative_contribution_pct"
-            ]
+        primary_interpretation = (
+            f"Replacing <strong>{html_escape(top_label)}</strong> "
+            f"with its training-reference value "
+            f"<strong>{direction_text}</strong> the LOF anomaly "
+            f"score from "
+            f"<strong>{format_number(top_lof_original, 6)}</strong> "
+            f"to "
+            f"<strong>{format_number(top_lof_modified, 6)}</strong>. "
+            f"The measured reduction was "
+            f"<strong>{format_number(abs(top_lof_change), 6)}</strong>."
         )
 
-        third_pct = safe_float(
-            attribution_df.iloc[2][
-                "relative_contribution_pct"
-            ]
-        )
+    elif top_lof_change > 0:
 
-        if (
-            np.isfinite(first_pct)
-            and np.isfinite(third_pct)
-            and abs(first_pct - third_pct) < 5
-        ):
-
-            close_top_features = True
-
-    if close_top_features:
-
-        joint_pattern = (
-            "The leading features have relatively similar "
-            "contributions, so the result should be interpreted "
-            "as a multi-feature pattern rather than evidence that "
-            "one feature alone explains the sample."
+        primary_interpretation = (
+            f"Replacing <strong>{html_escape(top_label)}</strong> "
+            f"with its training-reference value "
+            f"<strong>{direction_text}</strong> the LOF anomaly "
+            f"score from "
+            f"<strong>{format_number(top_lof_original, 6)}</strong> "
+            f"to "
+            f"<strong>{format_number(top_lof_modified, 6)}</strong>. "
+            f"The measured increase was "
+            f"<strong>{format_number(abs(top_lof_change), 6)}</strong>."
         )
 
     else:
 
-        joint_pattern = (
-            "The ranking indicates which individual feature "
-            "replacement produced the largest representation "
-            "change in this sample."
+        primary_interpretation = (
+            f"Replacing <strong>{html_escape(top_label)}</strong> "
+            "with its training-reference value produced no measurable "
+            "change in the LOF anomaly score."
         )
 
     return f"""
-    <section>
+    <section id="lof-sensitivity">
 
-    <h2>5. Form-Level Feature Attribution</h2>
-
-    <p>
-    A one-feature-at-a-time sensitivity analysis was performed
-    on the nine selected form-level OpenCV features. For each
-    experiment, one feature was replaced by its training-set
-    reference value while all other sample features were kept
-    unchanged.
-    </p>
-
-    <div class="attribution-highlight">
-
-        <div class="attribution-title">
-            Most Influential Form-Level Feature
+        <div class="section-header">
+            <div class="section-number">05</div>
+            <div>
+                <div class="eyebrow">Feature Sensitivity</div>
+                <h2>LOF Feature Sensitivity Analysis</h2>
+            </div>
         </div>
 
-        <h3>
-            {html_escape(top_label)}
-        </h3>
+        <p class="lead">
+            This controlled experiment examines how sensitive the
+            form-level LOF anomaly score is to each of the nine
+            selected OpenCV handwriting features.
+        </p>
 
-        <div class="attribution-grid">
+        <p>
+            One feature at a time is replaced with its training-set
+            reference value while the remaining sample features are
+            kept unchanged. The modified feature vector is passed
+            through the same learned representation pipeline and
+            the LOF score is recalculated.
+        </p>
 
-            <div>
-                <span>Original Value</span>
-                <strong>
-                    {format_number(
-                        top_original,
-                        5
-                    )}
-                </strong>
+        <div class="sensitivity-hero">
+
+            <div class="sensitivity-label">
+                MOST LOF-SENSITIVE FEATURE
             </div>
 
-            <div>
-                <span>Training Reference</span>
-                <strong>
-                    {format_number(
-                        top_reference,
-                        5
-                    )}
-                </strong>
+            <div class="sensitivity-feature">
+                {html_escape(top_label)}
             </div>
 
-            <div>
-                <span>Embedding Change</span>
-                <strong>
-                    {format_number(
-                        top_change,
-                        6
-                    )}
-                </strong>
+            <div class="sensitivity-description">
+                Replacing this feature with its training reference
+                value {direction_text} the measured LOF score.
             </div>
 
-            <div>
-                <span>Relative Contribution</span>
-                <strong>
-                    {format_percent(
-                        top_contribution,
-                        2
-                    )}
-                </strong>
+            <div class="sensitivity-metrics">
+
+                <div class="sensitivity-metric">
+                    <span>Original Value</span>
+                    <strong>
+                        {format_number(top_original, 5)}
+                    </strong>
+                </div>
+
+                <div class="sensitivity-metric">
+                    <span>Training Reference</span>
+                    <strong>
+                        {format_number(top_reference, 5)}
+                    </strong>
+                </div>
+
+                <div class="sensitivity-metric">
+                    <span>Original LOF</span>
+                    <strong>
+                        {format_number(top_lof_original, 6)}
+                    </strong>
+                </div>
+
+                <div class="sensitivity-metric">
+                    <span>Modified LOF</span>
+                    <strong>
+                        {format_number(top_lof_modified, 6)}
+                    </strong>
+                </div>
+
+                <div class="sensitivity-metric">
+                    <span>LOF Score Change</span>
+                    <strong>
+                        {format_number(top_lof_change, 6)}
+                    </strong>
+                </div>
+
+                <div class="sensitivity-metric emphasis">
+                    <span>Relative Sensitivity</span>
+                    <strong>
+                        {format_percent(top_sensitivity, 2)}
+                    </strong>
+                </div>
+
             </div>
 
         </div>
 
-    </div>
+        <h3>Feature Sensitivity Ranking</h3>
 
-    <h3>Feature Attribution Ranking</h3>
+        <div class="table-wrapper">
 
-    <table>
+            <table class="sensitivity-table">
 
-        <thead>
+                <thead>
 
-        <tr>
-            <th>Rank</th>
-            <th>Form-Level Feature</th>
-            <th>Original Value</th>
-            <th>Training Reference</th>
-            <th>Embedding Change</th>
-            <th>Relative Contribution</th>
-        </tr>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Form Feature</th>
+                        <th>Original</th>
+                        <th>Reference</th>
+                        <th>Original LOF</th>
+                        <th>Modified LOF</th>
+                        <th>LOF Change</th>
+                        <th>Direction</th>
+                        <th>Sensitivity</th>
+                    </tr>
 
-        </thead>
+                </thead>
 
-        <tbody>
+                <tbody>
+                    {''.join(table_rows)}
+                </tbody>
 
-        {''.join(table_rows)}
+            </table>
 
-        </tbody>
+        </div>
 
-    </table>
+        <h3>Sample-Specific Interpretation</h3>
 
-    <h3>Sample-Specific Interpretation</h3>
+        <div class="interpretation-box">
+            <p>
+                {primary_interpretation}
+            </p>
 
-    <p>
-    For <strong>{html_escape(sample_id)}</strong>,
-    replacing
-    <strong>{html_escape(top_label)}</strong>
-    with its training reference value produced the largest
-    change in the learned 256-dimensional representation,
-    with an embedding change of
-    <strong>{format_number(top_change, 6)}</strong>.
-    This feature accounted for approximately
-    <strong>{format_percent(top_contribution, 2)}</strong>
-    of the total measured one-feature-at-a-time embedding change.
-    </p>
+            <p>
+                Among the nine one-feature-at-a-time perturbations,
+                <strong>{html_escape(top_label)}</strong> produced the
+                largest absolute change in the form-level LOF anomaly
+                score, with a relative sensitivity of
+                <strong>{format_percent(top_sensitivity, 2)}</strong>.
+            </p>
 
-    <p>
-    {second_text}
-    </p>
+            <p>
+                {second_text}
+            </p>
+        </div>
 
-    <p>
-    {joint_pattern}
-    </p>
+        <div class="note">
 
-    <div class="note">
+            <strong>How to interpret this analysis</strong>
 
-    <strong>How to interpret this analysis:</strong>
+            <p>
+                The sensitivity percentage represents this feature's
+                share of the total absolute LOF-score change measured
+                across the nine separate perturbation experiments.
+            </p>
 
-    The contribution percentage represents model sensitivity
-    to controlled replacement of an individual feature.
-    It does <strong>not</strong> mean that the feature caused
-    the anomaly, caused dysgraphia, or represents a probability
-    of dysgraphia.
+            <p>
+                It does <strong>not</strong> represent a probability,
+                confidence, severity percentage, diagnostic measure,
+                or proof that the feature caused the anomaly.
+            </p>
 
-    </div>
+        </div>
 
-    <p class="source-note">
-    Attribution source:
-    <code>
-    {html_escape(
-        attribution_file.name
-    )}
-    </code>
-    </p>
+        <div class="note">
+
+            <strong>Important limitation</strong>
+
+            <p>
+                This is a one-feature-at-a-time sensitivity analysis.
+                It measures the effect of individually replacing
+                features with their training-reference values. It
+                does not capture interactions between multiple
+                OpenCV features.
+            </p>
+
+        </div>
+
+        <p class="source-note">
+            Sensitivity source:
+            <code>{html_escape(sensitivity_file.name)}</code>
+        </p>
 
     </section>
     """
@@ -1139,9 +1247,7 @@ def create_form_attribution_section(
 # WORD EXPLAINABILITY
 # ============================================================
 
-def load_word_explainability(
-    sample_id
-):
+def load_word_explainability(sample_id):
 
     folder = get_sample_explainability_folder(
         sample_id
@@ -1186,7 +1292,7 @@ def get_word_id_column(df):
 
     for col in [
         "word_id",
-        "id"
+        "id",
     ]:
 
         if col in df.columns:
@@ -1197,7 +1303,7 @@ def get_word_id_column(df):
 
 def filter_word_anomaly_for_sample(
     word_df,
-    sample_id
+    sample_id,
 ):
 
     if word_df.empty:
@@ -1205,7 +1311,7 @@ def filter_word_anomaly_for_sample(
 
     for col in [
         "form_id",
-        "sample_id"
+        "sample_id",
     ]:
 
         if col in word_df.columns:
@@ -1231,7 +1337,7 @@ def filter_word_anomaly_for_sample(
 
 def lookup_word_text(
     word_id,
-    words_metadata
+    words_metadata,
 ):
 
     if (
@@ -1271,7 +1377,7 @@ def lookup_word_text(
 
             value = safe_text(
                 row[col],
-                ""
+                "",
             )
 
             if value:
@@ -1286,19 +1392,17 @@ def lookup_word_text(
 
 def percentile_rank(
     value,
-    values
+    values,
 ):
 
-    value = safe_float(
-        value
-    )
+    value = safe_float(value)
 
     if not np.isfinite(value):
         return np.nan
 
     clean = pd.to_numeric(
         pd.Series(values),
-        errors="coerce"
+        errors="coerce",
     ).dropna()
 
     if clean.empty:
@@ -1315,15 +1419,21 @@ def percentile_rank(
 def get_dataset_percentiles(
     sample_id,
     master,
-    word_summary
+    word_summary,
 ):
 
     result = {
-        "resnet_percentile": np.nan,
+        "lof_percentile": np.nan,
         "word_percentile": np.nan,
     }
 
+    # --------------------------------------------------------
+    # LOF
+    # --------------------------------------------------------
+
     if not master.empty:
+
+        sample_rows = pd.DataFrame()
 
         if "sample_id" in master.columns:
 
@@ -1343,45 +1453,39 @@ def get_dataset_percentiles(
                 == sample_id
             ]
 
-        else:
-
-            sample_rows = pd.DataFrame()
-
         if not sample_rows.empty:
 
             row = sample_rows.iloc[0]
 
-            resnet_value = None
+            if "lof_anomaly_score" in master.columns:
 
-            for col in [
-                "resnet_anomaly_score",
-                "anomaly_score_0_100",
-                "anomaly_score",
-            ]:
+                result["lof_percentile"] = (
+                    percentile_rank(
+                        row.get(
+                            "lof_anomaly_score"
+                        ),
+                        master[
+                            "lof_anomaly_score"
+                        ],
+                    )
+                )
 
-                if col in master.columns:
+            elif "lof_raw_anomaly" in master.columns:
 
-                    resnet_value = row[col]
-                    break
+                result["lof_percentile"] = (
+                    percentile_rank(
+                        row.get(
+                            "lof_raw_anomaly"
+                        ),
+                        master[
+                            "lof_raw_anomaly"
+                        ],
+                    )
+                )
 
-            if resnet_value is not None:
-
-                for col in [
-                    "resnet_anomaly_score",
-                    "anomaly_score_0_100",
-                    "anomaly_score",
-                ]:
-
-                    if col in master.columns:
-
-                        result[
-                            "resnet_percentile"
-                        ] = percentile_rank(
-                            resnet_value,
-                            master[col],
-                        )
-
-                        break
+    # --------------------------------------------------------
+    # WORD
+    # --------------------------------------------------------
 
     if not word_summary.empty:
 
@@ -1409,8 +1513,6 @@ def get_dataset_percentiles(
 
             row = sample_rows.iloc[0]
 
-            word_value = None
-
             for col in [
                 "mean_word_anomaly",
                 "mean_anomaly",
@@ -1419,27 +1521,14 @@ def get_dataset_percentiles(
 
                 if col in word_summary.columns:
 
-                    word_value = row[col]
-                    break
-
-            if word_value is not None:
-
-                for col in [
-                    "mean_word_anomaly",
-                    "mean_anomaly",
-                    "word_anomaly_mean",
-                ]:
-
-                    if col in word_summary.columns:
-
-                        result[
-                            "word_percentile"
-                        ] = percentile_rank(
-                            word_value,
+                    result["word_percentile"] = (
+                        percentile_rank(
+                            row.get(col),
                             word_summary[col],
                         )
+                    )
 
-                        break
+                    break
 
     return result
 
@@ -1450,7 +1539,7 @@ def get_dataset_percentiles(
 
 def get_agreement(
     row,
-    percentiles
+    percentiles,
 ):
 
     for col in [
@@ -1463,14 +1552,14 @@ def get_agreement(
 
             value = safe_text(
                 row.get(col),
-                ""
+                "",
             )
 
             if value:
                 return value
 
-    rp = percentiles[
-        "resnet_percentile"
+    lp = percentiles[
+        "lof_percentile"
     ]
 
     wp = percentiles[
@@ -1478,26 +1567,26 @@ def get_agreement(
     ]
 
     if (
-        not np.isfinite(rp)
+        not np.isfinite(lp)
         or not np.isfinite(wp)
     ):
 
         return "Not available"
 
-    if rp >= 75 and wp >= 75:
+    if lp >= 75 and wp >= 75:
         return "High in both"
 
-    if rp >= 75 and wp < 75:
-        return "High ResNet only"
+    if lp >= 75 and wp < 75:
+        return "High LOF only"
 
-    if rp < 75 and wp >= 75:
+    if lp < 75 and wp >= 75:
         return "High word anomaly only"
 
     return "Low/moderate in both"
 
 
 # ============================================================
-# DOMINANT WORD FEATURES
+# TOP WORDS
 # ============================================================
 
 def get_top_words(
@@ -1510,27 +1599,20 @@ def get_top_words(
 
     word_df = filter_word_anomaly_for_sample(
         word_df,
-        sample_id
+        sample_id,
     )
 
     if word_df.empty:
         return pd.DataFrame()
 
-    if (
-        "word_anomaly_score"
-        not in word_df.columns
-    ):
+    if "word_anomaly_score" not in word_df.columns:
         return pd.DataFrame()
 
     word_df = word_df.copy()
 
-    word_df[
-        "word_anomaly_score"
-    ] = pd.to_numeric(
-        word_df[
-            "word_anomaly_score"
-        ],
-        errors="coerce"
+    word_df["word_anomaly_score"] = pd.to_numeric(
+        word_df["word_anomaly_score"],
+        errors="coerce",
     )
 
     word_df = word_df.dropna(
@@ -1562,9 +1644,7 @@ def get_top_words(
 
     if not explanation_df.empty:
 
-        explanation_df = (
-            explanation_df.copy()
-        )
+        explanation_df = explanation_df.copy()
 
         explanation_id_col = (
             get_word_id_column(
@@ -1574,9 +1654,7 @@ def get_top_words(
 
         if explanation_id_col:
 
-            explanation_df[
-                "_join_word_id"
-            ] = (
+            explanation_df["_join_word_id"] = (
                 explanation_df[
                     explanation_id_col
                 ]
@@ -1616,7 +1694,7 @@ def get_top_words(
                 how="left",
                 suffixes=(
                     "",
-                    "_explanation"
+                    "_explanation",
                 ),
             )
 
@@ -1624,26 +1702,23 @@ def get_top_words(
 
     for _, row in word_df.iterrows():
 
-        word = None
+        word = ""
 
         if "word" in row.index:
 
             word = safe_text(
                 row["word"],
-                ""
+                "",
             )
 
         if (
             not word
-            and "word_explanation"
-            in row.index
+            and "word_explanation" in row.index
         ):
 
             word = safe_text(
-                row[
-                    "word_explanation"
-                ],
-                ""
+                row["word_explanation"],
+                "",
             )
 
         if not word:
@@ -1661,26 +1736,22 @@ def get_top_words(
             )
 
         words.append(
-            word
-            if word
-            else "Unknown"
+            word if word else "Unknown"
         )
 
-    word_df[
-        "resolved_word"
-    ] = words
+    word_df["resolved_word"] = words
 
     return word_df
 
 
 def dominant_word_features(
-    top_words
+    top_words,
 ):
 
     if top_words.empty:
         return []
 
-    feature_counts = {}
+    counts = {}
 
     for _, row in top_words.iterrows():
 
@@ -1691,21 +1762,15 @@ def dominant_word_features(
             "",
         )
 
-        if not feature:
-            continue
+        if feature:
 
-        feature_counts[
-            feature
-        ] = (
-            feature_counts.get(
-                feature,
-                0
+            counts[feature] = (
+                counts.get(feature, 0)
+                + 1
             )
-            + 1
-        )
 
     return sorted(
-        feature_counts.items(),
+        counts.items(),
         key=lambda x: x[1],
         reverse=True,
     )
@@ -1717,12 +1782,10 @@ def dominant_word_features(
 
 def interpret_sample_feature(
     feature,
-    value
+    value,
 ):
 
-    value = safe_float(
-        value
-    )
+    value = safe_float(value)
 
     if not np.isfinite(value):
         return "Measurement unavailable."
@@ -1730,40 +1793,40 @@ def interpret_sample_feature(
     explanations = {
 
         "skew":
-            "Measures the estimated orientation/skew of the writing layout.",
+            "Estimated orientation or skew of the writing layout.",
 
         "baseline_deviation":
-            "Measures variation in the estimated writing baseline.",
+            "Variation in the estimated writing baseline.",
 
         "word_spacing_cv":
-            "Measures relative variability in spacing between detected words.",
+            "Relative variability in spacing between detected words.",
 
         "character_height_cv":
-            "Measures relative variability in character height.",
+            "Relative variability in character height.",
 
         "average_word_height":
-            "Measures the average vertical size of detected word regions.",
+            "Average vertical size of detected word regions.",
 
         "average_word_width":
-            "Measures the average horizontal size of detected word regions.",
+            "Average horizontal size of detected word regions.",
 
         "stroke_density":
-            "Measures the proportion of the writing region occupied by detected ink.",
+            "Proportion of the writing region occupied by detected ink.",
 
         "slant_angle":
-            "Measures the estimated directional inclination of handwriting strokes.",
+            "Estimated directional inclination of handwriting strokes.",
 
         "writing_area":
-            "Measures the proportion of the normalized form occupied by writing.",
+            "Proportion of the normalized form occupied by writing.",
 
         "connected_component_count":
-            "Counts connected ink components detected in the complete sample.",
+            "Number of connected ink components detected in the sample.",
 
         "num_lines":
             "Number of handwriting lines detected in the form.",
 
         "num_words":
-            "Number of word regions detected during form-level segmentation.",
+            "Number of word regions detected during form segmentation.",
 
         "num_components":
             "Number of components retained by the segmentation pipeline.",
@@ -1779,7 +1842,7 @@ def interpret_sample_feature(
 
 
 # ============================================================
-# AUTOMATIC SAMPLE FINDINGS
+# SAMPLE FINDINGS
 # ============================================================
 
 def build_sample_findings(
@@ -1788,12 +1851,11 @@ def build_sample_findings(
     top_words,
     percentiles,
     agreement,
+    lof_sensitivity_df,
 ):
 
-    feature_counts = (
-        dominant_word_features(
-            top_words
-        )
+    feature_counts = dominant_word_features(
+        top_words
     )
 
     dominant_feature = (
@@ -1813,9 +1875,7 @@ def build_sample_findings(
 
     if not top_words.empty:
 
-        for _, word in (
-            top_words.iterrows()
-        ):
+        for _, word in top_words.iterrows():
 
             z = safe_float(
                 word.get(
@@ -1826,11 +1886,8 @@ def build_sample_findings(
             if np.isfinite(z):
 
                 if (
-                    not np.isfinite(
-                        highest_z
-                    )
-                    or abs(z)
-                    > abs(highest_z)
+                    not np.isfinite(highest_z)
+                    or abs(z) > abs(highest_z)
                 ):
 
                     highest_z = z
@@ -1842,11 +1899,54 @@ def build_sample_findings(
                         "",
                     )
 
+    # --------------------------------------------------------
+    # LOF FEATURE
+    # --------------------------------------------------------
+
+    lof_feature = None
+    lof_feature_label = None
+    lof_feature_change = np.nan
+    lof_feature_sensitivity = np.nan
+
+    if (
+        lof_sensitivity_df is not None
+        and not lof_sensitivity_df.empty
+    ):
+
+        top_lof = lof_sensitivity_df.iloc[0]
+
+        lof_feature = safe_text(
+            top_lof.get("feature"),
+            "",
+        )
+
+        lof_feature_label = feature_label(
+            lof_feature,
+            FORM_LOF_FEATURES,
+        )
+
+        # IMPORTANT:
+        # CURRENT CSV COLUMN NAMES
+
+        lof_feature_change = safe_float(
+            top_lof.get(
+                "lof_score_change"
+            )
+        )
+
+        lof_feature_sensitivity = safe_float(
+            top_lof.get(
+                "relative_lof_sensitivity_pct"
+            )
+        )
+
+    # --------------------------------------------------------
+    # AGREEMENT
+    # --------------------------------------------------------
+
     if agreement == "High in both":
 
-        headline = (
-            "GLOBAL + LOCAL ANOMALY EVIDENCE"
-        )
+        headline = "GLOBAL + LOCAL ANOMALY EVIDENCE"
 
         finding = (
             f"Sample {sample_id} shows elevated anomaly evidence "
@@ -1855,38 +1955,32 @@ def build_sample_findings(
         )
 
         interpretation = (
-            "The form-level ResNet50 representation and multiple "
-            "word-level measurements independently identify this "
-            "sample as relatively unusual compared with their "
-            "respective reference distributions."
+            "The LOF-based form-level analysis identifies the sample "
+            "as relatively isolated in the learned 256-dimensional "
+            "embedding space, while the word-level measurements "
+            "also identify elevated deviations."
         )
 
-    elif agreement == "High ResNet only":
+    elif agreement == "High LOF only":
 
-        headline = (
-            "FORM-LEVEL ANOMALY DOMINATES"
-        )
+        headline = "FORM-LEVEL ANOMALY DOMINATES"
 
         finding = (
-            f"Sample {sample_id} is substantially more unusual "
+            f"Sample {sample_id} shows stronger anomaly evidence "
             "at the whole-form representation level than at the "
-            "individual-word level."
+            "aggregate word level."
         )
 
         interpretation = (
-            "The ResNet50 representation captures strong global "
-            "visual deviation, while the word-level measurements "
-            "show comparatively moderate deviations. This means "
-            "the strongest evidence for this sample is distributed "
-            "across broader handwriting appearance rather than "
-            "being concentrated in highly anomalous individual words."
+            "The sample is relatively isolated from its local "
+            "neighbourhood in the learned 256-dimensional embedding "
+            "space, while aggregate word-level measurements show "
+            "comparatively weaker deviation."
         )
 
     elif agreement == "High word anomaly only":
 
-        headline = (
-            "WORD-LEVEL ANOMALY DOMINATES"
-        )
+        headline = "WORD-LEVEL ANOMALY DOMINATES"
 
         finding = (
             f"Sample {sample_id} has relatively moderate whole-form "
@@ -1902,9 +1996,7 @@ def build_sample_findings(
 
     else:
 
-        headline = (
-            "LOWER ANOMALY AT BOTH LEVELS"
-        )
+        headline = "LOWER ANOMALY AT BOTH LEVELS"
 
         finding = (
             f"Sample {sample_id} does not show strong anomaly evidence "
@@ -1916,22 +2008,21 @@ def build_sample_findings(
             "distribution used by the research pipeline."
         )
 
+    # --------------------------------------------------------
+    # WORD PATTERN
+    # --------------------------------------------------------
+
     if dominant_feature:
 
-        feature_label = dict(
-            WORD_FEATURES
-        ).get(
+        feature_label_text = feature_label(
             dominant_feature,
-            dominant_feature.replace(
-                "_",
-                " "
-            ).title(),
+            WORD_FEATURES,
         )
 
         word_pattern = (
             f"The dominant word-level anomaly feature among the "
             f"top-ranked words is <strong>"
-            f"{html_escape(feature_label)}</strong>, "
+            f"{html_escape(feature_label_text)}</strong>, "
             f"appearing in {dominant_count} of the top "
             f"{len(top_words)} anomalous words."
         )
@@ -1943,19 +2034,15 @@ def build_sample_findings(
             "be determined from the available records."
         )
 
+    # --------------------------------------------------------
+    # Z-SCORE
+    # --------------------------------------------------------
+
     if np.isfinite(highest_z):
 
-        z_label = dict(
-            WORD_FEATURES
-        ).get(
+        z_label = feature_label(
             highest_z_feature,
-            safe_text(
-                highest_z_feature,
-                "word-level feature",
-            ).replace(
-                "_",
-                " "
-            ).title(),
+            WORD_FEATURES,
         )
 
         z_pattern = (
@@ -1972,8 +2059,12 @@ def build_sample_findings(
             "word-level records."
         )
 
-    rp = percentiles[
-        "resnet_percentile"
+    # --------------------------------------------------------
+    # PERCENTILES
+    # --------------------------------------------------------
+
+    lp = percentiles[
+        "lof_percentile"
     ]
 
     wp = percentiles[
@@ -1982,11 +2073,11 @@ def build_sample_findings(
 
     percentile_text = []
 
-    if np.isfinite(rp):
+    if np.isfinite(lp):
 
         percentile_text.append(
-            f"the form-level ResNet50 score is at approximately "
-            f"the {format_percent(rp, 1)} dataset percentile"
+            f"the form-level LOF score is at approximately "
+            f"the {format_percent(lp, 1)} dataset percentile"
         )
 
     if np.isfinite(wp):
@@ -1996,58 +2087,93 @@ def build_sample_findings(
             f"the {format_percent(wp, 1)} dataset percentile"
         )
 
-    if percentile_text:
+    relative_position = (
+        " and ".join(percentile_text) + "."
+        if percentile_text
+        else
+        "dataset percentile information is not available."
+    )
 
-        relative_position = (
-            " and ".join(
-                percentile_text
-            )
-            + "."
+    # --------------------------------------------------------
+    # LOF FEATURE TEXT
+    # --------------------------------------------------------
+
+    if lof_feature:
+
+        if lof_feature_change < 0:
+            lof_direction = "reduced"
+
+        elif lof_feature_change > 0:
+            lof_direction = "increased"
+
+        else:
+            lof_direction = "did not change"
+
+        lof_feature_pattern = (
+            f"The most LOF-sensitive form-level feature was "
+            f"<strong>{html_escape(lof_feature_label)}</strong>. "
+            f"Replacing it with its training-reference value "
+            f"{lof_direction} the LOF score by "
+            f"<strong>{format_number(abs(lof_feature_change), 6)}</strong>, "
+            f"representing "
+            f"{format_percent(lof_feature_sensitivity, 2)} "
+            "of the total absolute LOF change measured across the "
+            "nine one-feature-at-a-time perturbations."
         )
 
     else:
 
-        relative_position = (
-            "dataset percentile information is not available."
+        lof_feature_pattern = (
+            "Sample-specific LOF feature sensitivity information "
+            "was not available."
         )
+
+    # --------------------------------------------------------
+    # WHAT THE SAMPLE TELLS US
+    # --------------------------------------------------------
+
+    common_text = (
+        f"{lof_feature_pattern} "
+        f"{word_pattern} "
+        f"{z_pattern}"
+    )
 
     if agreement == "High in both":
 
         what_it_tells = (
             f"The evidence for {sample_id} is distributed across "
-            "both global and local handwriting characteristics. "
-            "The whole-form representation identifies the sample "
-            "as unusual while several individual words also show "
-            "elevated deviations. "
-            f"{word_pattern} "
-            f"{z_pattern} "
-            "Taken together, this makes the sample an example "
-            "of agreement between the two anomaly-detection views."
+            "both whole-form and local handwriting characteristics. "
+            "The form-level LOF analysis identifies the sample as "
+            "relatively unusual in the learned embedding space, "
+            "while several individual words also show elevated "
+            "deviations. "
+            f"{common_text} "
+            "Taken together, this represents agreement between "
+            "the two anomaly-analysis views."
         )
 
-    elif agreement == "High ResNet only":
+    elif agreement == "High LOF only":
 
         what_it_tells = (
-            f"The main signal for {sample_id} comes from the complete "
-            "handwriting representation rather than extreme individual "
-            "word anomalies. "
-            f"{word_pattern} "
-            f"{z_pattern} "
-            "The word-level evidence is present but comparatively "
-            "weaker, demonstrating the value of separating global "
-            "handwriting representation from local word-level analysis."
+            f"The main signal for {sample_id} comes from the "
+            "whole-form embedding and its local-density relationship "
+            "rather than extreme aggregate word anomalies. "
+            f"{common_text} "
+            "The word-level evidence is comparatively weaker, "
+            "demonstrating the value of separating whole-form "
+            "representation from local word-level analysis."
         )
 
     elif agreement == "High word anomaly only":
 
         what_it_tells = (
-            f"The main signal for {sample_id} is localized to individual "
-            "word regions rather than strongly expressed across the "
-            "complete handwriting form. "
-            f"{word_pattern} "
-            f"{z_pattern} "
-            "This indicates that local analysis contributes information "
-            "that may be less visible in the global representation."
+            f"The main signal for {sample_id} is localized to "
+            "individual word regions rather than strongly expressed "
+            "across the complete handwriting form. "
+            f"{common_text} "
+            "This indicates that local analysis contributes "
+            "information that may be less visible in the whole-form "
+            "representation."
         )
 
     else:
@@ -2055,8 +2181,7 @@ def build_sample_findings(
         what_it_tells = (
             f"The available evidence for {sample_id} is relatively "
             "moderate at both analysis levels. "
-            f"{word_pattern} "
-            f"{z_pattern} "
+            f"{common_text} "
             "The sample therefore provides comparatively limited "
             "evidence of strong deviation from the reference "
             "distribution used by this research pipeline."
@@ -2068,12 +2193,17 @@ def build_sample_findings(
         "interpretation": interpretation,
         "word_pattern": word_pattern,
         "z_pattern": z_pattern,
+        "lof_feature_pattern": lof_feature_pattern,
         "relative_position": relative_position,
         "what_it_tells": what_it_tells,
         "dominant_feature": dominant_feature,
         "dominant_count": dominant_count,
         "highest_z": highest_z,
         "highest_z_feature": highest_z_feature,
+        "lof_feature": lof_feature,
+        "lof_feature_label": lof_feature_label,
+        "lof_feature_change": lof_feature_change,
+        "lof_feature_sensitivity": lof_feature_sensitivity,
     }
 
 
@@ -2084,20 +2214,26 @@ def build_sample_findings(
 def image_html(
     path,
     alt,
-    class_name="report-image"
+    class_name="report-image",
 ):
 
-    encoded = image_to_base64(
-        path
-    )
+    encoded = image_to_base64(path)
 
     if not encoded:
 
         return f"""
         <div class="missing-image">
-            <strong>{html_escape(alt)}</strong>
-            <br>
-            Visual not available for this exact sample/word.
+
+            <div class="missing-icon">IMG</div>
+
+            <strong>
+                {html_escape(alt)}
+            </strong>
+
+            <span>
+                Visual not available for this exact sample/word.
+            </span>
+
         </div>
         """
 
@@ -2121,23 +2257,30 @@ def create_sample_specific_section(
 ):
 
     return f"""
-    <section>
+    <section id="finding">
 
-        <h2>1. Sample-Specific Finding</h2>
+        <div class="section-header">
+
+            <div class="section-number">01</div>
+
+            <div>
+                <div class="eyebrow">Sample Finding</div>
+                <h2>Sample-Specific Finding</h2>
+            </div>
+
+        </div>
 
         <div class="finding-hero">
 
             <div class="finding-badge">
-                {html_escape(
-                    findings["headline"]
-                )}
+                {html_escape(findings["headline"])}
             </div>
 
-            <h3>
+            <h3 class="sample-title">
                 {html_escape(sample_id)}
             </h3>
 
-            <p>
+            <p class="finding-main">
                 {findings["finding"]}
             </p>
 
@@ -2150,23 +2293,16 @@ def create_sample_specific_section(
                 <div class="evidence-card">
                     <span>Agreement</span>
                     <strong>
-                        {html_escape(
-                            agreement
-                        )}
+                        {html_escape(agreement)}
                     </strong>
                 </div>
 
                 <div class="evidence-card">
-                    <span>Dominant Word Feature</span>
+                    <span>Most LOF-Sensitive Feature</span>
                     <strong>
                         {html_escape(
-                            findings[
-                                "dominant_feature"
-                            ]
+                            findings["lof_feature_label"]
                             or "N/A"
-                        ).replace(
-                            "_",
-                            " "
                         )}
                     </strong>
                 </div>
@@ -2175,19 +2311,21 @@ def create_sample_specific_section(
                     <span>Highest Word Z-score</span>
                     <strong>
                         {format_number(
-                            findings[
-                                "highest_z"
-                            ],
-                            2
+                            findings["highest_z"],
+                            2,
                         )}
                     </strong>
                 </div>
 
             </div>
 
-            <h3>
-                What this sample tells us
-            </h3>
+            <h3>Most LOF-Sensitive Feature</h3>
+
+            <p>
+                {findings["lof_feature_pattern"]}
+            </p>
+
+            <h3>What this sample tells us</h3>
 
             <p>
                 {findings["what_it_tells"]}
@@ -2195,12 +2333,14 @@ def create_sample_specific_section(
 
             <div class="note">
 
-                <strong>Important:</strong>
+                <strong>Research interpretation only</strong>
 
-                These findings describe statistical and
-                representational deviations from the reference
-                distributions. They do not establish dysgraphia
-                or any other clinical condition.
+                <p>
+                    These findings describe statistical and
+                    representational deviations from the reference
+                    distributions. They do not establish dysgraphia
+                    or any other clinical condition.
+                </p>
 
             </div>
 
@@ -2211,7 +2351,7 @@ def create_sample_specific_section(
 
 
 def create_summary_cards(
-    resnet,
+    lof_score,
     mean_word,
     max_word,
     top5,
@@ -2222,101 +2362,80 @@ def create_summary_cards(
     return f"""
     <div class="summary-grid">
 
-        <div class="metric-card">
-            <span>Form-Level ResNet50</span>
-            <strong>
-                {format_number(
-                    resnet,
-                    2
-                )}
-            </strong>
+        <div class="metric-card primary">
+            <div class="metric-icon">L</div>
+            <span>LOF Form-Level Anomaly</span>
+            <strong>{format_number(lof_score, 2)}</strong>
+            <small>Higher = more locally isolated</small>
         </div>
 
         <div class="metric-card">
+            <div class="metric-icon">W</div>
             <span>Mean Word Anomaly</span>
-            <strong>
-                {format_number(
-                    mean_word,
-                    3
-                )}
-            </strong>
+            <strong>{format_number(mean_word, 3)}</strong>
+            <small>Aggregate local evidence</small>
         </div>
 
         <div class="metric-card">
+            <div class="metric-icon">M</div>
             <span>Maximum Word Anomaly</span>
-            <strong>
-                {format_number(
-                    max_word,
-                    3
-                )}
-            </strong>
+            <strong>{format_number(max_word, 3)}</strong>
+            <small>Highest individual word score</small>
         </div>
 
         <div class="metric-card">
+            <div class="metric-icon">T</div>
             <span>Top-5 Mean Word Anomaly</span>
-            <strong>
-                {format_number(
-                    top5,
-                    3
-                )}
-            </strong>
+            <strong>{format_number(top5, 3)}</strong>
+            <small>Average of strongest local signals</small>
         </div>
 
         <div class="metric-card">
-            <span>Combined Research Score</span>
-            <strong>
-                {format_number(
-                    combined,
-                    2
-                )}
-            </strong>
+            <div class="metric-icon">G</div>
+            <span>Global–Local Evidence Score</span>
+            <strong>{format_number(combined, 2)}</strong>
+            <small>50/50 percentile heuristic</small>
         </div>
 
-        <div class="metric-card">
+        <div class="metric-card agreement-card">
+            <div class="metric-icon">A</div>
             <span>Agreement</span>
-            <strong>
-                {html_escape(
-                    agreement
-                )}
-            </strong>
+            <strong>{html_escape(agreement)}</strong>
+            <small>Dataset-relative comparison</small>
         </div>
 
     </div>
     """
 
 
-def create_sample_features_table(
-    row
-):
+def create_sample_features_table(row):
 
     rows = []
 
     for key, label in SAMPLE_FEATURES:
 
-        value = row.get(
-            key
-        )
+        value = row.get(key)
 
         rows.append(
             f"""
             <tr>
 
                 <td>
-                    {html_escape(label)}
+                    <strong>{html_escape(label)}</strong>
+                    <span class="feature-code">
+                        {html_escape(key)}
+                    </span>
                 </td>
 
-                <td>
-                    {format_number(
-                        value,
-                        4
-                    )}
+                <td class="value-cell">
+                    {format_number(value, 4)}
                 </td>
 
                 <td>
                     {html_escape(
                         interpret_sample_feature(
                             key,
-                            value
+                            value,
                         )
                     )}
                 </td>
@@ -2326,47 +2445,39 @@ def create_sample_features_table(
         )
 
     return f"""
-    <table>
+    <div class="table-wrapper">
 
-        <thead>
+        <table>
 
-            <tr>
-                <th>Feature</th>
-                <th>Value</th>
-                <th>What it measures</th>
-            </tr>
+            <thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>Value</th>
+                    <th>What It Measures</th>
+                </tr>
+            </thead>
 
-        </thead>
+            <tbody>
+                {''.join(rows)}
+            </tbody>
 
-        <tbody>
+        </table>
 
-            {''.join(rows)}
-
-        </tbody>
-
-    </table>
+    </div>
     """
 
 
-def create_word_feature_table(
-    row
-):
+def create_word_feature_table(row):
 
     rows = []
 
     for feature, label in WORD_FEATURES:
 
-        value = row.get(
-            feature
-        )
+        value = row.get(feature)
 
-        z_column = (
-            f"{feature}_z"
-        )
+        z_column = f"{feature}_z"
 
-        z = row.get(
-            z_column
-        )
+        z = row.get(z_column)
 
         if not np.isfinite(
             safe_float(z)
@@ -2380,7 +2491,6 @@ def create_word_feature_table(
             )
 
             if main_feature == feature:
-
                 z = row.get(
                     "main_feature_z"
                 )
@@ -2389,22 +2499,14 @@ def create_word_feature_table(
             f"""
             <tr>
 
+                <td>{html_escape(label)}</td>
+
                 <td>
-                    {html_escape(label)}
+                    {format_number(value, 4)}
                 </td>
 
                 <td>
-                    {format_number(
-                        value,
-                        4
-                    )}
-                </td>
-
-                <td>
-                    {format_number(
-                        z,
-                        3
-                    )}
+                    {format_number(z, 3)}
                 </td>
 
             </tr>
@@ -2412,25 +2514,27 @@ def create_word_feature_table(
         )
 
     return f"""
-    <table class="small-table">
+    <div class="table-wrapper">
 
-        <thead>
+        <table class="small-table">
 
-            <tr>
-                <th>Feature</th>
-                <th>Value</th>
-                <th>Robust Z-score</th>
-            </tr>
+            <thead>
 
-        </thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>Value</th>
+                    <th>Robust Z-score</th>
+                </tr>
 
-        <tbody>
+            </thead>
 
-            {''.join(rows)}
+            <tbody>
+                {''.join(rows)}
+            </tbody>
 
-        </tbody>
+        </table>
 
-    </table>
+    </div>
     """
 
 
@@ -2441,72 +2545,54 @@ def create_word_section(
 ):
 
     word_id = safe_text(
-        row.get(
-            "word_id"
-        ),
+        row.get("word_id"),
         "",
     )
 
     word = safe_text(
-        row.get(
-            "resolved_word"
-        ),
+        row.get("resolved_word"),
         "Unknown",
     )
 
     score = safe_float(
-        row.get(
-            "word_anomaly_score"
-        )
+        row.get("word_anomaly_score")
     )
 
     main_feature = safe_text(
-        row.get(
-            "main_anomaly_feature"
-        ),
+        row.get("main_anomaly_feature"),
         "N/A",
     )
 
     z = safe_float(
-        row.get(
-            "main_feature_z"
-        )
+        row.get("main_feature_z")
     )
 
     activation = safe_float(
-        row.get(
-            "high_activation_percentage"
-        )
+        row.get("high_activation_percentage")
     )
 
     explanation = safe_text(
-        row.get(
-            "explanation"
-        ),
+        row.get("explanation"),
         "",
     )
 
     if not explanation:
 
-        feature_label = dict(
-            WORD_FEATURES
-        ).get(
+        feature_label_text = feature_label(
             main_feature,
-            main_feature.replace(
-                "_",
-                " "
-            ).title(),
+            WORD_FEATURES,
         )
 
         explanation = (
             f"The word has a word anomaly score of "
-            f"{format_number(score, 2)}. The primary contributing "
-            f"feature is {feature_label}, with a robust Z-score of "
-            f"{format_number(z, 2)}. The Grad-CAM highlights regions "
-            "that contribute strongly to the ResNet50 handwriting "
-            "representation. This visualization is model evidence "
-            "of unusual representation patterns and is not a "
-            "clinical diagnosis."
+            f"{format_number(score, 2)}. The primary feature "
+            f"identified for this word is {feature_label_text}, "
+            f"with a robust Z-score of "
+            f"{format_number(z, 2)}. "
+            "The Grad-CAM highlights regions that contribute "
+            "strongly to the ResNet50 handwriting representation. "
+            "This visualization is model evidence of unusual "
+            "representation patterns and is not a clinical diagnosis."
         )
 
     original_path = resolve_word_image(
@@ -2514,9 +2600,7 @@ def create_word_section(
         word_id,
         word,
         rank,
-        row.get(
-            "original_crop"
-        ),
+        row.get("original_crop"),
         "original",
     )
 
@@ -2525,9 +2609,7 @@ def create_word_section(
         word_id,
         word,
         rank,
-        row.get(
-            "gradcam_image"
-        ),
+        row.get("gradcam_image"),
         "gradcam",
     )
 
@@ -2536,132 +2618,109 @@ def create_word_section(
         word_id,
         word,
         rank,
-        row.get(
-            "comparison_image"
-        ),
+        row.get("comparison_image"),
         "comparison",
     )
 
     return f"""
     <div class="word-card">
 
-        <h3>
-            #{rank} — {html_escape(word)}
-        </h3>
+        <div class="word-card-header">
+
+            <div>
+                <div class="word-rank">#{rank}</div>
+                <h3>{html_escape(word)}</h3>
+            </div>
+
+            <div class="word-score">
+                <span>Anomaly Score</span>
+                <strong>{format_number(score, 3)}</strong>
+            </div>
+
+        </div>
 
         <div class="word-meta">
 
-            <strong>
-                Anomaly Score:
-            </strong>
+            <span>
+                <strong>Word ID</strong>
+                {html_escape(word_id)}
+            </span>
 
-            {format_number(
-                score,
-                3
-            )}
+            <span>
+                <strong>Main Feature</strong>
+                {html_escape(
+                    feature_label(
+                        main_feature,
+                        WORD_FEATURES,
+                    )
+                )}
+            </span>
 
-            &nbsp;&nbsp;|&nbsp;&nbsp;
-
-            <strong>
-                Word ID:
-            </strong>
-
-            {html_escape(word_id)}
-
-            &nbsp;&nbsp;|&nbsp;&nbsp;
-
-            <strong>
-                Main Feature:
-            </strong>
-
-            {html_escape(main_feature)}
-
-            &nbsp;&nbsp;|&nbsp;&nbsp;
-
-            <strong>
-                Z-score:
-            </strong>
-
-            {format_number(
-                z,
-                3
-            )}
+            <span>
+                <strong>Z-score</strong>
+                {format_number(z, 3)}
+            </span>
 
         </div>
 
         <div class="word-images">
 
-            <div>
-
-                <h4>
-                    Original Word
-                </h4>
-
+            <div class="image-panel">
+                <h4>Original Word</h4>
                 {image_html(
                     original_path,
-                    f"Original word {word}"
+                    f"Original word {word}",
                 )}
-
             </div>
 
-            <div>
-
-                <h4>
-                    ResNet50 Grad-CAM
-                </h4>
-
+            <div class="image-panel">
+                <h4>ResNet50 Grad-CAM</h4>
                 {image_html(
                     gradcam_path,
-                    f"Grad-CAM for {word}"
+                    f"Grad-CAM for {word}",
                 )}
-
             </div>
 
-            <div>
-
-                <h4>
-                    Original + Grad-CAM
-                </h4>
-
+            <div class="image-panel">
+                <h4>Original + Grad-CAM</h4>
                 {image_html(
                     comparison_path,
-                    f"Comparison for {word}"
+                    f"Comparison for {word}",
                 )}
-
             </div>
 
         </div>
 
-        <h4>
-            Word-Level Feature Measurements
-        </h4>
+        <details class="feature-details">
 
-        {create_word_feature_table(row)}
+            <summary>
+                Word-Level Feature Measurements
+            </summary>
 
-        <p>
+            {create_word_feature_table(row)}
 
-            <strong>
-                High-activation region:
-            </strong>
+        </details>
+
+        <div class="activation-box">
+
+            <strong>High-activation region:</strong>
 
             {format_percent(
                 activation,
-                2
+                2,
             )}
 
-        </p>
+        </div>
 
-        <p>
+        <div class="word-interpretation">
 
-            <strong>
-                Interpretation:
-            </strong>
+            <strong>Interpretation</strong>
 
-            {html_escape(
-                explanation
-            )}
+            <p>
+                {html_escape(explanation)}
+            </p>
 
-        </p>
+        </div>
 
     </div>
     """
@@ -2679,90 +2738,75 @@ def generate_html(
     word_summary,
     metadata,
     words_metadata,
+    lof_sensitivity_df=None,
 ):
 
     # --------------------------------------------------------
-    # Scores
+    # SCORES
     # --------------------------------------------------------
 
-    resnet = safe_float(
-        row.get(
-            "resnet_anomaly_score"
-        )
+    lof_score = safe_float(
+        row.get("lof_anomaly_score")
     )
 
-    if not np.isfinite(resnet):
+    if not np.isfinite(lof_score):
 
-        resnet = safe_float(
-            row.get(
-                "anomaly_score_0_100"
-            )
+        lof_score = safe_float(
+            row.get("lof_raw_anomaly")
         )
 
     mean_word = safe_float(
-        row.get(
-            "mean_word_anomaly"
-        )
+        row.get("mean_word_anomaly")
     )
 
     max_word = safe_float(
-        row.get(
-            "maximum_word_anomaly"
-        )
+        row.get("maximum_word_anomaly")
     )
 
     top5 = safe_float(
-        row.get(
-            "top_5_mean_anomaly"
-        )
+        row.get("top_5_mean_anomaly")
     )
 
     combined = safe_float(
-        row.get(
-            "combined_anomaly_score"
-        )
+        row.get("combined_anomaly_score")
     )
 
-    if not np.isfinite(
-        combined
-    ):
+    if not np.isfinite(combined):
 
-        rp = percentile_rank(
-            resnet,
+        lp_temp = percentile_rank(
+            lof_score,
             master.get(
-                "resnet_anomaly_score",
-                []
+                "lof_anomaly_score",
+                [],
             ),
         )
 
-        wp = percentile_rank(
+        wp_temp = percentile_rank(
             mean_word,
             word_summary.get(
                 "mean_word_anomaly",
-                []
+                [],
             ),
         )
 
         if (
-            np.isfinite(rp)
-            and np.isfinite(wp)
+            np.isfinite(lp_temp)
+            and np.isfinite(wp_temp)
         ):
 
             combined = (
-                0.5 * rp
-                + 0.5 * wp
+                0.5 * lp_temp
+                + 0.5 * wp_temp
             )
 
     # --------------------------------------------------------
-    # Percentiles
+    # PERCENTILES
     # --------------------------------------------------------
 
-    percentiles = (
-        get_dataset_percentiles(
-            sample_id,
-            master,
-            word_summary,
-        )
+    percentiles = get_dataset_percentiles(
+        sample_id,
+        master,
+        word_summary,
     )
 
     agreement = get_agreement(
@@ -2771,13 +2815,23 @@ def generate_html(
     )
 
     # --------------------------------------------------------
-    # Words
+    # LOF SENSITIVITY
     # --------------------------------------------------------
 
-    explanation_df = (
-        load_word_explainability(
-            sample_id
+    if lof_sensitivity_df is None:
+
+        lof_sensitivity_df, _ = (
+            load_lof_feature_sensitivity(
+                sample_id
+            )
         )
+
+    # --------------------------------------------------------
+    # WORD EXPLAINABILITY
+    # --------------------------------------------------------
+
+    explanation_df = load_word_explainability(
+        sample_id
     )
 
     top_words = get_top_words(
@@ -2789,7 +2843,7 @@ def generate_html(
     )
 
     # --------------------------------------------------------
-    # Findings
+    # FINDINGS
     # --------------------------------------------------------
 
     findings = build_sample_findings(
@@ -2798,26 +2852,29 @@ def generate_html(
         top_words,
         percentiles,
         agreement,
+        lof_sensitivity_df,
     )
 
     # --------------------------------------------------------
-    # Original image
+    # ORIGINAL SAMPLE
     # --------------------------------------------------------
 
-    original_image = (
-        find_exact_sample_image(
-            sample_id
-        )
+    original_image = find_exact_sample_image(
+        sample_id
+    )
+
+    original_section = image_html(
+        original_image,
+        f"Original handwriting sample {sample_id}",
+        "sample-image",
     )
 
     # --------------------------------------------------------
-    # Word counts
+    # WORD COUNTS
     # --------------------------------------------------------
 
     form_word_count = safe_float(
-        row.get(
-            "num_words"
-        )
+        row.get("num_words")
     )
 
     valid_word_count = len(
@@ -2832,55 +2889,46 @@ def generate_html(
     )
 
     # --------------------------------------------------------
-    # Word feature frequency
+    # WORD FEATURE FREQUENCY
     # --------------------------------------------------------
 
-    feature_counts = (
-        dominant_word_features(
-            top_words
-        )
+    feature_counts = dominant_word_features(
+        top_words
     )
 
     feature_rows = []
 
     for feature, count in feature_counts:
 
-        label = dict(
-            WORD_FEATURES
-        ).get(
+        label = feature_label(
             feature,
-            feature.replace(
-                "_",
-                " "
-            ).title(),
+            WORD_FEATURES,
         )
 
         feature_rows.append(
             f"""
             <tr>
-
                 <td>
-                    {html_escape(label)}
+                    <strong>
+                        {html_escape(label)}
+                    </strong>
                 </td>
-
                 <td>
-                    {count}
+                    <span class="count-pill">
+                        {count}
+                    </span>
                 </td>
-
             </tr>
             """
         )
 
     # --------------------------------------------------------
-    # Top words
+    # WORD SECTIONS
     # --------------------------------------------------------
 
     word_sections = []
 
-    for rank, (
-        _,
-        word_row
-    ) in enumerate(
+    for rank, (_, word_row) in enumerate(
         top_words.iterrows(),
         start=1,
     ):
@@ -2894,26 +2942,16 @@ def generate_html(
         )
 
     # --------------------------------------------------------
-    # Original image
-    # --------------------------------------------------------
-
-    original_section = image_html(
-        original_image,
-        f"Original handwriting sample {sample_id}",
-        "sample-image",
-    )
-
-    # --------------------------------------------------------
-    # Dataset chart
+    # CHART
     # --------------------------------------------------------
 
     chart_section = image_html(
         COMPARISON_CHART,
-        "Dataset-level ResNet50 versus word anomaly comparison",
+        "Dataset-level LOF versus word anomaly comparison",
     )
 
     # --------------------------------------------------------
-    # Explainability status
+    # EXPLAINABILITY STATUS
     # --------------------------------------------------------
 
     if explanation_df.empty:
@@ -2921,9 +2959,19 @@ def generate_html(
         explainability_status = """
         <div class="warning">
 
-            Sample-specific word explainability data was not found.
-            Word-level anomaly results are still shown, but Grad-CAM
-            images have not been generated for this sample.
+            <div class="status-icon">!</div>
+
+            <div>
+                <strong>
+                    Word explainability data unavailable
+                </strong>
+
+                <p>
+                    Word-level anomaly results may still be shown,
+                    but sample-specific Grad-CAM records were not
+                    found for this sample.
+                </p>
+            </div>
 
         </div>
         """
@@ -2933,23 +2981,90 @@ def generate_html(
         explainability_status = f"""
         <div class="success">
 
-            Sample-specific word explainability data found.
+            <div class="status-icon">✓</div>
 
-            {explanation_count} explainability records are associated
-            with sample
-            <strong>
-                {html_escape(sample_id)}
-            </strong>.
+            <div>
+                <strong>
+                    Word explainability data available
+                </strong>
+
+                <p>
+                    {explanation_count} explainability records
+                    are associated with
+                    <strong>{html_escape(sample_id)}</strong>.
+                </p>
+            </div>
 
         </div>
         """
 
     # --------------------------------------------------------
-    # Percentiles
+    # LOF STATUS
     # --------------------------------------------------------
 
-    rp = percentiles[
-        "resnet_percentile"
+    if lof_sensitivity_df.empty:
+
+        lof_sensitivity_status = """
+        <div class="warning">
+
+            <div class="status-icon">!</div>
+
+            <div>
+                <strong>
+                    LOF feature sensitivity unavailable
+                </strong>
+
+                <p>
+                    The form-level LOF score is available, but
+                    feature-level LOF sensitivity could not be
+                    reported.
+                </p>
+            </div>
+
+        </div>
+        """
+
+    else:
+
+        top_feature = safe_text(
+            lof_sensitivity_df.iloc[0].get(
+                "feature"
+            ),
+            "N/A",
+        )
+
+        top_label = feature_label(
+            top_feature,
+            FORM_LOF_FEATURES,
+        )
+
+        lof_sensitivity_status = f"""
+        <div class="success">
+
+            <div class="status-icon">✓</div>
+
+            <div>
+                <strong>
+                    LOF feature sensitivity data available
+                </strong>
+
+                <p>
+                    Most LOF-sensitive feature:
+                    <strong>
+                        {html_escape(top_label)}
+                    </strong>
+                </p>
+            </div>
+
+        </div>
+        """
+
+    # --------------------------------------------------------
+    # PERCENTILES
+    # --------------------------------------------------------
+
+    lp = percentiles[
+        "lof_percentile"
     ]
 
     wp = percentiles[
@@ -2957,7 +3072,7 @@ def generate_html(
     ]
 
     # --------------------------------------------------------
-    # HTML
+    # HTML DOCUMENT
     # --------------------------------------------------------
 
     return f"""
@@ -2969,182 +3084,720 @@ def generate_html(
 
 <meta charset="UTF-8">
 
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
+
 <title>
-Explainable Handwriting Anomaly Report -
+Explainable Handwriting Anomaly Report —
 {html_escape(sample_id)}
 </title>
 
 <style>
 
+/* ==========================================================
+   GLOBAL
+   ========================================================== */
+
+:root {{
+    --ink: #172033;
+    --muted: #64748b;
+    --soft: #f5f7fb;
+    --line: #e2e8f0;
+    --panel: #ffffff;
+    --blue: #2563eb;
+    --blue-soft: #eff6ff;
+    --purple: #7c3aed;
+    --purple-soft: #f5f3ff;
+    --green: #16a34a;
+    --green-soft: #f0fdf4;
+    --orange: #ea580c;
+    --orange-soft: #fff7ed;
+    --red: #dc2626;
+    --shadow:
+        0 10px 30px rgba(15, 23, 42, 0.07);
+}}
+
+* {{
+    box-sizing: border-box;
+}}
+
+html {{
+    scroll-behavior: smooth;
+}}
+
 body {{
-    font-family: Arial, sans-serif;
     margin: 0;
-    background: #f4f7fb;
-    color: #1f2937;
-    line-height: 1.6;
+    font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+    background:
+        linear-gradient(
+            180deg,
+            #eef3f9 0,
+            #f7f9fc 300px,
+            #f7f9fc 100%
+        );
+    color: var(--ink);
+    line-height: 1.7;
 }}
 
 .container {{
-    max-width: 1200px;
+    max-width: 1280px;
     margin: auto;
-    padding: 30px;
+    padding: 32px 24px 60px;
 }}
 
-header {{
-    background: #111827;
-    color: white;
-    padding: 35px;
-    border-radius: 14px;
-    margin-bottom: 25px;
+p {{
+    color: #475569;
 }}
 
-h1 {{
-    margin-top: 0;
+strong {{
+    color: #172033;
+}}
+
+h1,
+h2,
+h3,
+h4 {{
+    color: var(--ink);
+    line-height: 1.25;
 }}
 
 h2 {{
-    margin-top: 0;
-    color: #111827;
-    border-bottom: 2px solid #e5e7eb;
-    padding-bottom: 10px;
+    margin: 0;
+    font-size: 25px;
 }}
 
 h3 {{
-    color: #1f2937;
+    margin-top: 30px;
+    font-size: 19px;
 }}
 
-section {{
-    background: white;
-    padding: 28px;
-    margin-bottom: 25px;
-    border-radius: 14px;
-    box-shadow: 0 3px 12px rgba(0,0,0,0.06);
+code {{
+    font-family:
+        "Cascadia Code",
+        "Consolas",
+        monospace;
+    font-size: 0.88em;
+    background: #eef2f7;
+    border: 1px solid #e2e8f0;
+    padding: 3px 7px;
+    border-radius: 6px;
+    color: #334155;
+    word-break: break-word;
 }}
+
+
+/* ==========================================================
+   HEADER
+   ========================================================== */
+
+.report-header {{
+    position: relative;
+    overflow: hidden;
+    background:
+        linear-gradient(
+            135deg,
+            #111827 0%,
+            #1e293b 55%,
+            #263b61 100%
+        );
+    color: white;
+    border-radius: 22px;
+    padding: 42px;
+    box-shadow:
+        0 20px 45px rgba(15, 23, 42, 0.20);
+    margin-bottom: 18px;
+}}
+
+.report-header::after {{
+    content: "";
+    position: absolute;
+    width: 320px;
+    height: 320px;
+    border-radius: 50%;
+    right: -100px;
+    top: -150px;
+    background: rgba(255,255,255,0.05);
+}}
+
+.report-header h1 {{
+    position: relative;
+    z-index: 1;
+    color: white;
+    margin: 0 0 12px;
+    font-size: clamp(28px, 4vw, 44px);
+    letter-spacing: -1px;
+}}
+
+.header-subtitle {{
+    position: relative;
+    z-index: 1;
+    color: #cbd5e1;
+    font-size: 16px;
+    max-width: 760px;
+}}
+
+.header-meta {{
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 25px;
+}}
+
+.header-chip {{
+    padding: 7px 12px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.09);
+    border: 1px solid rgba(255,255,255,0.14);
+    color: #e2e8f0;
+    font-size: 12px;
+    font-weight: 700;
+}}
+
+
+/* ==========================================================
+   NAVIGATION
+   ========================================================== */
+
+.report-nav {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    background: rgba(255,255,255,0.92);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 10px;
+    margin-bottom: 25px;
+    position: sticky;
+    top: 10px;
+    z-index: 10;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 5px 20px rgba(15,23,42,0.06);
+}}
+
+.report-nav a {{
+    text-decoration: none;
+    color: #475569;
+    padding: 7px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+}}
+
+.report-nav a:hover {{
+    background: var(--blue-soft);
+    color: var(--blue);
+}}
+
+
+/* ==========================================================
+   SECTION
+   ========================================================== */
+
+section {{
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 32px;
+    margin-bottom: 25px;
+    box-shadow: var(--shadow);
+}}
+
+.section-header {{
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 22px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+}}
+
+.section-number {{
+    flex: 0 0 auto;
+    width: 48px;
+    height: 48px;
+    border-radius: 13px;
+    display: grid;
+    place-items: center;
+    background: var(--blue-soft);
+    color: var(--blue);
+    font-size: 14px;
+    font-weight: 900;
+}}
+
+.eyebrow {{
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--blue);
+    font-size: 10px;
+    font-weight: 900;
+    margin-bottom: 4px;
+}}
+
+.lead {{
+    font-size: 17px;
+    color: #334155;
+}}
+
+
+/* ==========================================================
+   SUMMARY CARDS
+   ========================================================== */
 
 .summary-grid {{
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns:
+        repeat(3, minmax(0, 1fr));
     gap: 15px;
 }}
 
 .metric-card {{
-    background: #f8fafc;
-    padding: 20px;
-    border-radius: 10px;
-    border: 1px solid #e5e7eb;
+    position: relative;
+    min-height: 145px;
+    padding: 21px;
+    border: 1px solid var(--line);
+    border-radius: 15px;
+    background:
+        linear-gradient(
+            145deg,
+            #ffffff,
+            #f8fafc
+        );
+}}
+
+.metric-card.primary {{
+    border-color: #bfdbfe;
+    background:
+        linear-gradient(
+            145deg,
+            #eff6ff,
+            #ffffff
+        );
+}}
+
+.metric-icon {{
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 9px;
+    background: #e2e8f0;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 900;
+    margin-bottom: 13px;
+}}
+
+.metric-card.primary .metric-icon {{
+    background: #dbeafe;
+    color: var(--blue);
 }}
 
 .metric-card span {{
     display: block;
-    color: #64748b;
-    font-size: 13px;
-    margin-bottom: 7px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
 }}
 
 .metric-card strong {{
+    display: block;
+    margin-top: 5px;
     font-size: 25px;
+    letter-spacing: -0.5px;
 }}
 
+.metric-card small {{
+    display: block;
+    color: #94a3b8;
+    font-size: 10px;
+    margin-top: 5px;
+}}
+
+.agreement-card strong {{
+    font-size: 18px;
+}}
+
+
+/* ==========================================================
+   FINDING
+   ========================================================== */
+
 .finding-hero {{
-    background: #f8fafc;
-    padding: 25px;
-    border-radius: 12px;
-    border-left: 6px solid #2563eb;
+    background:
+        linear-gradient(
+            145deg,
+            #f8fafc,
+            #eef4ff
+        );
+    border: 1px solid #dbeafe;
+    border-left: 5px solid var(--blue);
+    border-radius: 16px;
+    padding: 27px;
 }}
 
 .finding-badge {{
-    display: inline-block;
-    padding: 8px 14px;
-    border-radius: 20px;
+    display: inline-flex;
+    align-items: center;
+    padding: 7px 12px;
+    border-radius: 999px;
     background: #dbeafe;
     color: #1e40af;
-    font-weight: bold;
-    margin-bottom: 12px;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: .4px;
+}}
+
+.sample-title {{
+    font-size: 28px;
+    margin: 16px 0 8px;
+}}
+
+.finding-main {{
+    font-size: 18px;
+    color: #1e293b;
 }}
 
 .evidence-grid {{
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 15px;
-    margin: 20px 0;
+    grid-template-columns:
+        repeat(3, minmax(0, 1fr));
+    gap: 13px;
+    margin: 24px 0;
 }}
 
 .evidence-card {{
     background: white;
-    padding: 18px;
-    border-radius: 10px;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 17px;
 }}
 
 .evidence-card span {{
     display: block;
-    color: #64748b;
-    font-size: 13px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
 }}
 
 .evidence-card strong {{
     display: block;
     margin-top: 6px;
-    font-size: 18px;
+    font-size: 17px;
 }}
 
-.attribution-highlight {{
-    background: #f8fafc;
-    border-left: 6px solid #7c3aed;
-    padding: 24px;
-    border-radius: 12px;
-    margin: 20px 0;
+
+/* ==========================================================
+   SENSITIVITY
+   ========================================================== */
+
+.sensitivity-hero {{
+    background:
+        linear-gradient(
+            135deg,
+            #faf5ff,
+            #f5f3ff 55%,
+            #ffffff
+        );
+    border: 1px solid #ddd6fe;
+    border-left: 5px solid var(--purple);
+    border-radius: 17px;
+    padding: 27px;
+    margin: 22px 0;
 }}
 
-.attribution-title {{
+.sensitivity-label {{
+    color: #7c3aed;
+    font-size: 10px;
+    letter-spacing: 1.2px;
+    font-weight: 900;
+}}
+
+.sensitivity-feature {{
+    font-size: 29px;
+    font-weight: 900;
+    margin-top: 7px;
+    color: #4c1d95;
+}}
+
+.sensitivity-description {{
     color: #64748b;
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-weight: bold;
+    margin: 7px 0 22px;
 }}
 
-.attribution-highlight h3 {{
-    font-size: 25px;
-    margin: 8px 0 20px 0;
-}}
-
-.attribution-grid {{
+.sensitivity-metrics {{
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 15px;
+    grid-template-columns:
+        repeat(3, minmax(0, 1fr));
+    gap: 11px;
 }}
 
-.attribution-grid > div {{
-    background: white;
-    padding: 15px;
-    border: 1px solid #e5e7eb;
-    border-radius: 9px;
+.sensitivity-metric {{
+    background: rgba(255,255,255,0.82);
+    border: 1px solid #e9d5ff;
+    border-radius: 11px;
+    padding: 14px;
 }}
 
-.attribution-grid span {{
+.sensitivity-metric span {{
     display: block;
     color: #64748b;
+    font-size: 10px;
+    font-weight: 700;
+}}
+
+.sensitivity-metric strong {{
+    display: block;
+    margin-top: 5px;
+    font-size: 17px;
+}}
+
+.sensitivity-metric.emphasis {{
+    background: #ede9fe;
+    border-color: #c4b5fd;
+}}
+
+.sensitivity-metric.emphasis strong {{
+    color: #6d28d9;
+    font-size: 21px;
+}}
+
+.interpretation-box {{
+    background: #f8fafc;
+    border-radius: 13px;
+    padding: 18px 20px;
+    border: 1px solid var(--line);
+}}
+
+
+/* ==========================================================
+   TABLES
+   ========================================================== */
+
+.table-wrapper {{
+    width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    margin: 15px 0 20px;
+}}
+
+table {{
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 700px;
+}}
+
+th {{
+    background: #f1f5f9;
+    color: #475569;
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    white-space: nowrap;
+}}
+
+th,
+td {{
+    padding: 12px 13px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+}}
+
+tbody tr:last-child td {{
+    border-bottom: 0;
+}}
+
+tbody tr:hover {{
+    background: #f8fafc;
+}}
+
+.value-cell {{
+    font-family:
+        "Cascadia Code",
+        "Consolas",
+        monospace;
+    font-weight: 700;
+}}
+
+.feature-code {{
+    display: block;
+    color: #94a3b8;
+    font-family:
+        "Cascadia Code",
+        "Consolas",
+        monospace;
+    font-size: 10px;
+    margin-top: 3px;
+}}
+
+.rank-cell {{
+    width: 55px;
+}}
+
+.rank-pill {{
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: #ede9fe;
+    color: #6d28d9;
+    font-size: 11px;
+    font-weight: 900;
+}}
+
+.direction {{
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 800;
+}}
+
+.direction.negative {{
+    background: #ecfdf5;
+    color: #047857;
+}}
+
+.direction.positive {{
+    background: #fff7ed;
+    color: #c2410c;
+}}
+
+.direction.neutral {{
+    background: #f1f5f9;
+    color: #64748b;
+}}
+
+.count-pill {{
+    display: inline-block;
+    min-width: 28px;
+    padding: 3px 8px;
+    text-align: center;
+    border-radius: 999px;
+    background: #dbeafe;
+    color: #1d4ed8;
+    font-weight: 800;
+    font-size: 11px;
+}}
+
+.small-table {{
     font-size: 12px;
 }}
 
-.attribution-grid strong {{
-    display: block;
-    margin-top: 5px;
-    font-size: 18px;
+
+/* ==========================================================
+   WORD CARDS
+   ========================================================== */
+
+.word-card {{
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 23px;
+    margin: 22px 0;
+    background:
+        linear-gradient(
+            145deg,
+            #ffffff,
+            #fafcff
+        );
+    box-shadow:
+        0 7px 20px rgba(15,23,42,0.045);
 }}
 
-.sample-image {{
-    max-width: 90%;
-    max-height: 800px;
+.word-card-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+}}
+
+.word-card-header h3 {{
+    margin: 2px 0 0;
+    font-size: 23px;
+}}
+
+.word-rank {{
+    color: var(--blue);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: .7px;
+}}
+
+.word-score {{
+    text-align: right;
+    background: #eff6ff;
+    border: 1px solid #dbeafe;
+    border-radius: 11px;
+    padding: 10px 14px;
+}}
+
+.word-score span {{
     display: block;
-    margin: auto;
+    color: #64748b;
+    font-size: 9px;
+    font-weight: 700;
+}}
+
+.word-score strong {{
+    display: block;
+    color: #1d4ed8;
+    font-size: 19px;
+}}
+
+.word-meta {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+    margin: 15px 0 20px;
+}}
+
+.word-meta span {{
+    padding: 6px 9px;
+    border-radius: 8px;
+    background: #f8fafc;
+    border: 1px solid var(--line);
+    color: #64748b;
+    font-size: 10px;
+}}
+
+.word-meta strong {{
+    color: #334155;
+    margin-right: 4px;
+}}
+
+.word-images {{
+    display: grid;
+    grid-template-columns:
+        repeat(3, minmax(0, 1fr));
+    gap: 14px;
+}}
+
+.image-panel {{
+    min-width: 0;
+}}
+
+.image-panel h4 {{
+    font-size: 12px;
+    margin: 0 0 8px;
+    color: #475569;
 }}
 
 .image-container {{
-    background: #f8fafc;
-    padding: 10px;
-    border-radius: 10px;
+    background: #f1f5f9;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    padding: 9px;
     text-align: center;
 }}
 
@@ -3152,125 +3805,284 @@ section {{
     max-width: 100%;
     max-height: 450px;
     object-fit: contain;
+    border-radius: 7px;
 }}
 
-table {{
-    width: 100%;
-    border-collapse: collapse;
-    margin: 15px 0;
-}}
-
-th {{
-    background: #e5e7eb;
-    text-align: left;
-}}
-
-th, td {{
-    padding: 10px;
-    border: 1px solid #d1d5db;
-}}
-
-.small-table {{
-    font-size: 13px;
-}}
-
-.word-card {{
-    border: 1px solid #dbe2ea;
-    border-radius: 12px;
-    padding: 22px;
-    margin-bottom: 25px;
-    background: #fafcff;
-}}
-
-.word-meta {{
-    color: #475569;
-    margin-bottom: 18px;
-}}
-
-.word-images {{
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 15px;
+.sample-image {{
+    display: block;
+    max-width: 92%;
+    max-height: 850px;
+    margin: auto;
+    border-radius: 8px;
 }}
 
 .missing-image {{
-    min-height: 180px;
+    min-height: 210px;
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    background: #f1f5f9;
+    gap: 7px;
     color: #64748b;
-    border-radius: 10px;
-    padding: 20px;
     text-align: center;
+    padding: 20px;
 }}
 
-.warning {{
-    background: #fff7ed;
-    border-left: 5px solid #f97316;
-    padding: 15px;
-    border-radius: 8px;
-}}
-
-.success {{
-    background: #f0fdf4;
-    border-left: 5px solid #22c55e;
-    padding: 15px;
-    border-radius: 8px;
-}}
-
-.note {{
-    background: #eff6ff;
-    border-left: 5px solid #3b82f6;
-    padding: 15px;
-    border-radius: 8px;
-    margin-top: 20px;
-}}
-
-.source-note {{
+.missing-icon {{
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: #e2e8f0;
     color: #64748b;
+    font-size: 10px;
+    font-weight: 900;
+}}
+
+.feature-details {{
+    margin-top: 18px;
+}}
+
+.feature-details summary {{
+    cursor: pointer;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 800;
+}}
+
+.activation-box {{
+    margin-top: 15px;
+    background: #f8fafc;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 11px 14px;
     font-size: 12px;
 }}
 
-code {{
-    background: #f1f5f9;
-    padding: 3px 6px;
-    border-radius: 5px;
+.word-interpretation {{
+    margin-top: 15px;
+    background: #eff6ff;
+    border-left: 4px solid var(--blue);
+    border-radius: 9px;
+    padding: 13px 15px;
 }}
+
+.word-interpretation p {{
+    margin-bottom: 0;
+    font-size: 13px;
+}}
+
+
+/* ==========================================================
+   IMAGE / LEGEND
+   ========================================================== */
 
 .legend {{
     display: flex;
-    gap: 20px;
     flex-wrap: wrap;
-    margin: 15px 0;
+    gap: 9px;
+    margin: 18px 0;
 }}
 
 .legend-item {{
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
+    padding: 7px 10px;
+    background: #f8fafc;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: #64748b;
+    font-size: 11px;
 }}
 
 .legend-box {{
-    width: 22px;
-    height: 22px;
-    border-radius: 4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
 }}
+
+
+/* ==========================================================
+   STATUS / NOTES
+   ========================================================== */
+
+.warning,
+.success,
+.note {{
+    display: flex;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 11px;
+    margin: 18px 0;
+}}
+
+.warning {{
+    background: var(--orange-soft);
+    border: 1px solid #fed7aa;
+    color: #9a3412;
+}}
+
+.success {{
+    background: var(--green-soft);
+    border: 1px solid #bbf7d0;
+    color: #166534;
+}}
+
+.note {{
+    background: var(--blue-soft);
+    border: 1px solid #bfdbfe;
+    color: #1e40af;
+}}
+
+.status-icon {{
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.65);
+    font-weight: 900;
+}}
+
+.warning p,
+.success p,
+.note p {{
+    margin: 5px 0 0;
+    color: inherit;
+}}
+
+.source-note {{
+    color: #94a3b8;
+    font-size: 11px;
+}}
+
+
+/* ==========================================================
+   ARCHITECTURE
+   ========================================================== */
+
+.architecture {{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}}
+
+.arch-node {{
+    width: min(600px, 100%);
+    text-align: center;
+    padding: 15px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: #f8fafc;
+    font-weight: 800;
+}}
+
+.arch-node.primary {{
+    background: #eff6ff;
+    border-color: #bfdbfe;
+    color: #1e40af;
+}}
+
+.arch-node.purple {{
+    background: #f5f3ff;
+    border-color: #ddd6fe;
+    color: #6d28d9;
+}}
+
+.arch-arrow {{
+    color: #94a3b8;
+    font-size: 20px;
+    font-weight: 900;
+}}
+
+.arch-plus {{
+    color: #94a3b8;
+    font-weight: 900;
+}}
+
+
+/* ==========================================================
+   FOOTER
+   ========================================================== */
 
 footer {{
     text-align: center;
     color: #64748b;
-    padding: 30px;
+    padding: 30px 10px;
+    font-size: 12px;
 }}
 
-@media(max-width: 850px) {{
+.footer-title {{
+    color: #334155;
+    font-weight: 900;
+    margin-bottom: 5px;
+}}
+
+
+/* ==========================================================
+   RESPONSIVE
+   ========================================================== */
+
+@media(max-width: 950px) {{
+
+    .summary-grid,
+    .evidence-grid {{
+        grid-template-columns:
+            repeat(2, minmax(0, 1fr));
+    }}
+
+    .sensitivity-metrics {{
+        grid-template-columns:
+            repeat(2, minmax(0, 1fr));
+    }}
+
+    .word-images {{
+        grid-template-columns: 1fr;
+    }}
+
+}}
+
+@media(max-width: 650px) {{
+
+    .container {{
+        padding: 15px 10px 40px;
+    }}
+
+    .report-header {{
+        padding: 27px 20px;
+        border-radius: 16px;
+    }}
+
+    section {{
+        padding: 20px 16px;
+        border-radius: 14px;
+    }}
 
     .summary-grid,
     .evidence-grid,
-    .word-images,
-    .attribution-grid {{
+    .sensitivity-metrics {{
         grid-template-columns: 1fr;
+    }}
+
+    .report-nav {{
+        position: static;
+    }}
+
+    .word-card-header {{
+        align-items: flex-start;
+        flex-direction: column;
+    }}
+
+    .word-score {{
+        text-align: left;
+    }}
+
+    .section-header {{
+        align-items: flex-start;
     }}
 
 }}
@@ -3279,31 +4091,115 @@ footer {{
 
 </head>
 
+
 <body>
 
 <div class="container">
 
-<header>
 
-<h1>
-Explainable Handwriting Anomaly Detection Report
-</h1>
+<!-- ======================================================
+     HEADER
+     ====================================================== -->
 
-<p>
+<header class="report-header">
 
-<strong>
-Sample ID:
-</strong>
+    <h1>
+        Explainable Handwriting
+        Anomaly Detection Report
+    </h1>
 
-{html_escape(sample_id)}
+    <div class="header-subtitle">
 
-</p>
+        Sample-specific analysis combining learned visual
+        representation, handcrafted handwriting measurements,
+        local-density anomaly detection, word-level analysis,
+        feature sensitivity, and visual explanation.
 
-<p>
-ResNet50 + OpenCV + Word-Level Anomaly Analysis + Grad-CAM
-</p>
+    </div>
+
+    <div class="header-meta">
+
+        <span class="header-chip">
+            Sample: {html_escape(sample_id)}
+        </span>
+
+        <span class="header-chip">
+            ResNet50
+        </span>
+
+        <span class="header-chip">
+            OpenCV Features
+        </span>
+
+        <span class="header-chip">
+            256-D Embedding
+        </span>
+
+        <span class="header-chip">
+            LOF
+        </span>
+
+        <span class="header-chip">
+            Word Analysis
+        </span>
+
+        <span class="header-chip">
+            Grad-CAM
+        </span>
+
+    </div>
 
 </header>
+
+
+<!-- ======================================================
+     NAVIGATION
+     ====================================================== -->
+
+<nav class="report-nav">
+
+    <a href="#finding">01 Finding</a>
+    <a href="#summary">02 Summary</a>
+    <a href="#original">03 Image</a>
+    <a href="#opencv">04 OpenCV</a>
+    <a href="#lof-sensitivity">05 Sensitivity</a>
+    <a href="#architecture">06 Architecture</a>
+    <a href="#words">07 Words</a>
+    <a href="#top-words">08 Top Words</a>
+    <a href="#gradcam">09 Grad-CAM</a>
+    <a href="#global-local">10 Global–Local</a>
+    <a href="#interpretation">11 Findings</a>
+    <a href="#limitations">12 Limits</a>
+    <a href="#conclusion">13 Conclusion</a>
+
+</nav>
+
+
+<!-- ======================================================
+     RESEARCH SCOPE BANNER
+     ====================================================== -->
+
+<div class="note">
+
+    <div class="status-icon">i</div>
+
+    <div>
+
+        <strong>
+            Research Scope
+        </strong>
+
+        <p>
+            This report presents explainable handwriting
+            anomaly-analysis results. The system is a research
+            framework and is not a standalone clinical diagnostic
+            system. Scores describe deviations relative to the
+            reference data used by the pipeline.
+        </p>
+
+    </div>
+
+</div>
 
 
 <!-- ======================================================
@@ -3321,34 +4217,64 @@ ResNet50 + OpenCV + Word-Level Anomaly Analysis + Grad-CAM
      SECTION 2
      ====================================================== -->
 
-<section>
+<section id="summary">
 
-<h2>
-2. Executive Summary
-</h2>
+    <div class="section-header">
 
-{create_summary_cards(
-    resnet,
-    mean_word,
-    max_word,
-    top5,
-    combined,
-    agreement,
-)}
+        <div class="section-number">02</div>
 
-<div class="note">
+        <div>
+            <div class="eyebrow">Overview</div>
+            <h2>Executive Summary</h2>
+        </div>
 
-<strong>
-Interpretation:
-</strong>
+    </div>
 
-The anomaly scores describe how unusual the handwriting appears
-relative to the reference distribution used by the research pipeline.
+    {create_summary_cards(
+        lof_score,
+        mean_word,
+        max_word,
+        top5,
+        combined,
+        agreement,
+    )}
 
-They are not dysgraphia probabilities, clinical severity scores,
-confidence scores, or medical diagnoses.
+    <div class="note">
 
-</div>
+        <div class="status-icon">i</div>
+
+        <div>
+
+            <strong>
+                Score interpretation
+            </strong>
+
+            <p>
+                The LOF score describes how isolated the sample is
+                relative to the local neighbourhood of the training
+                reference embeddings.
+            </p>
+
+            <p>
+                Word-level anomaly scores describe deviations of
+                individual word measurements from their reference
+                distribution.
+            </p>
+
+            <p>
+                The Global–Local Evidence Score is a percentile-based
+                research heuristic combining the two evidence streams.
+            </p>
+
+            <p>
+                These values are not dysgraphia probabilities,
+                clinical severity scores, confidence scores, or
+                medical diagnoses.
+            </p>
+
+        </div>
+
+    </div>
 
 </section>
 
@@ -3357,22 +4283,25 @@ confidence scores, or medical diagnoses.
      SECTION 3
      ====================================================== -->
 
-<section>
+<section id="original">
 
-<h2>
-3. Original Handwriting Sample
-</h2>
+    <div class="section-header">
 
-<p>
+        <div class="section-number">03</div>
 
-Original handwriting sample:
-<strong>
-{html_escape(sample_id)}
-</strong>
+        <div>
+            <div class="eyebrow">Visual Input</div>
+            <h2>Original Handwriting Sample</h2>
+        </div>
 
-</p>
+    </div>
 
-{original_section}
+    <p>
+        Exact handwriting image associated with sample
+        <strong>{html_escape(sample_id)}</strong>.
+    </p>
+
+    {original_section}
 
 </section>
 
@@ -3381,20 +4310,27 @@ Original handwriting sample:
      SECTION 4
      ====================================================== -->
 
-<section>
+<section id="opencv">
 
-<h2>
-4. Sample-Level OpenCV Measurements
-</h2>
+    <div class="section-header">
 
-<p>
+        <div class="section-number">04</div>
 
-These measurements are extracted from the complete handwriting
-form. They are separate from the word-level anomaly features.
+        <div>
+            <div class="eyebrow">Handcrafted Features</div>
+            <h2>Sample-Level OpenCV Measurements</h2>
+        </div>
 
-</p>
+    </div>
 
-{create_sample_features_table(row)}
+    <p>
+        These measurements are extracted from the complete
+        handwriting form. They are separate from the word-level
+        anomaly features and form part of the learned form-level
+        representation.
+    </p>
+
+    {create_sample_features_table(row)}
 
 </section>
 
@@ -3403,8 +4339,9 @@ form. They are separate from the word-level anomaly features.
      SECTION 5
      ====================================================== -->
 
-{create_form_attribution_section(
-    sample_id
+{create_lof_sensitivity_section(
+    sample_id,
+    lof_sensitivity_df,
 )}
 
 
@@ -3412,81 +4349,114 @@ form. They are separate from the word-level anomaly features.
      SECTION 6
      ====================================================== -->
 
-<section>
+<section id="architecture">
 
-<h2>
-6. Feature and Model Architecture
-</h2>
+    <div class="section-header">
 
-<div style="
-background:#f8fafc;
-padding:25px;
-border-radius:12px;
-text-align:center;
-font-weight:bold;
-">
+        <div class="section-number">06</div>
 
-<p>
-Handwriting Image
-</p>
+        <div>
+            <div class="eyebrow">Model Pipeline</div>
+            <h2>Feature and Model Architecture</h2>
+        </div>
 
-<p>↓</p>
+    </div>
 
-<p>
-ResNet50<br>
-2048-D
-</p>
+    <div class="architecture">
 
-<p>+</p>
+        <div class="arch-node primary">
+            Handwriting Image
+        </div>
 
-<p>
-9 Selected<br>
-Sample-Level / Form-Level<br>
-OpenCV Features
-</p>
+        <div class="arch-arrow">↓</div>
 
-<p>↓</p>
+        <div class="arch-node">
+            ResNet50 — 2048-D
+        </div>
 
-<p>
-OpenCV Encoder<br>
-64-D
-</p>
+        <div class="arch-plus">+</div>
 
-<p>↓</p>
+        <div class="arch-node">
+            9 Selected Form-Level
+            OpenCV Features
+        </div>
 
-<p>
-Fusion<br>
-2112-D
-</p>
+        <div class="arch-arrow">↓</div>
 
-<p>↓</p>
+        <div class="arch-node">
+            OpenCV Encoder — 64-D
+        </div>
 
-<p>
-Feature Attention
-</p>
+        <div class="arch-arrow">↓</div>
 
-<p>↓</p>
+        <div class="arch-node">
+            Feature Fusion — 2112-D
+        </div>
 
-<p>
-256-D Shared Representation
-</p>
+        <div class="arch-arrow">↓</div>
 
-<p>↓</p>
+        <div class="arch-node purple">
+            Feature Attention
+        </div>
 
-<p>
-Anomaly Score
-</p>
+        <div class="arch-arrow">↓</div>
 
-</div>
+        <div class="arch-node purple">
+            256-D Shared Representation
+        </div>
 
-<p>
+        <div class="arch-arrow">↓</div>
 
-The ResNet50 branch uses ImageNet-pretrained visual representations,
-while the OpenCV branch contributes handcrafted handwriting
-measurements. Their representations are fused for sample-level
-anomaly detection.
+        <div class="arch-node">
+            Local Outlier Factor (LOF)
+        </div>
 
-</p>
+        <div class="arch-arrow">↓</div>
+
+        <div class="arch-node primary">
+            Form-Level Anomaly Score
+        </div>
+
+    </div>
+
+    <p>
+        The ResNet50 branch provides a 2048-dimensional visual
+        representation, while the nine OpenCV features are encoded
+        into a 64-dimensional handcrafted-feature representation.
+    </p>
+
+    <p>
+        These representations are fused into a 2112-dimensional
+        vector, processed through feature attention, and transformed
+        into a 256-dimensional embedding.
+    </p>
+
+    <p>
+        LOF is then applied in this learned embedding space. It
+        measures how isolated each held-out handwriting sample is
+        relative to the local neighbourhood established by the
+        training embeddings.
+    </p>
+
+    <div class="note">
+
+        <div class="status-icon">i</div>
+
+        <div>
+
+            <strong>
+                Current evaluation setup
+            </strong>
+
+            <p>
+                The current form-level evaluation uses the
+                1232-sample training split and evaluates the LOF
+                scorer on 307 held-out validation samples.
+            </p>
+
+        </div>
+
+    </div>
 
 </section>
 
@@ -3495,81 +4465,86 @@ anomaly detection.
      SECTION 7
      ====================================================== -->
 
-<section>
+<section id="words">
 
-<h2>
-7. Word-Level Anomaly Analysis
-</h2>
+    <div class="section-header">
 
-<p>
+        <div class="section-number">07</div>
 
-The form-level pipeline detected approximately
-<strong>
-{format_number(
-    form_word_count,
-    0
-)}
-</strong>
-words, while the word-anomaly pipeline analyzed
-<strong>
-{valid_word_count}
-</strong>
-valid handwriting words.
+        <div>
+            <div class="eyebrow">Local Analysis</div>
+            <h2>Word-Level Anomaly Analysis</h2>
+        </div>
 
-These counts can differ because the word-level pipeline filters
-invalid, punctuation, and unsuitable word regions before anomaly
-scoring.
+    </div>
 
-</p>
+    <p>
+        The form-level pipeline detected approximately
+        <strong>
+            {format_number(form_word_count, 0)}
+        </strong>
+        words, while the word-anomaly pipeline analyzed
+        <strong>
+            {valid_word_count}
+        </strong>
+        valid handwriting words.
+    </p>
 
-<p>
+    <p>
+        These counts can differ because the word-level pipeline
+        filters invalid, punctuation, and unsuitable word regions
+        before anomaly scoring.
+    </p>
 
-The word-level pipeline evaluates individual handwriting regions
-using robust feature-based anomaly scoring. Higher values indicate
-greater deviation from the reference word distribution.
+    <p>
+        The word-level pipeline evaluates individual handwriting
+        regions using robust feature-based anomaly scoring. A
+        reference distribution is constructed using feature medians
+        and median absolute deviations (MAD), and robust Z-scores
+        quantify feature-level deviation.
+    </p>
 
-</p>
+    {explainability_status}
 
-{explainability_status}
+    {lof_sensitivity_status}
 
-<h3>
-Dominant Word-Level Pattern
-</h3>
+    <h3>
+        Dominant Word-Level Pattern
+    </h3>
 
-<p>
-{findings["word_pattern"]}
-</p>
+    <p>
+        {findings["word_pattern"]}
+    </p>
 
-<p>
-{findings["z_pattern"]}
-</p>
+    <p>
+        {findings["z_pattern"]}
+    </p>
 
-<table>
+    <div class="table-wrapper">
 
-<thead>
+        <table>
 
-<tr>
-<th>
-Recurring Feature
-</th>
+            <thead>
 
-<th>
-Occurrences in Top 10
-</th>
-</tr>
+                <tr>
+                    <th>Recurring Feature</th>
+                    <th>Occurrences in Top 10</th>
+                </tr>
 
-</thead>
+            </thead>
 
-<tbody>
+            <tbody>
 
-{''.join(feature_rows)
-if feature_rows
-else
-'<tr><td colspan="2">No dominant feature available.</td></tr>'}
+                {''.join(feature_rows)
+                if feature_rows
+                else
+                '<tr><td colspan="2">No dominant feature available.</td></tr>'}
 
-</tbody>
+            </tbody>
 
-</table>
+        </table>
+
+    </div>
 
 </section>
 
@@ -3578,23 +4553,28 @@ else
      SECTION 8
      ====================================================== -->
 
-<section>
+<section id="top-words">
 
-<h2>
-8. Top 10 Anomalous Words
-</h2>
+    <div class="section-header">
 
-<p>
+        <div class="section-number">08</div>
 
-The following words are ranked by their word-level anomaly score
-within the selected sample.
+        <div>
+            <div class="eyebrow">Local Evidence</div>
+            <h2>Top 10 Anomalous Words</h2>
+        </div>
 
-</p>
+    </div>
 
-{''.join(word_sections)
-if word_sections
-else
-'<p>No word-level anomaly records were available for this sample.</p>'}
+    <p>
+        The following words are ranked by their word-level anomaly
+        score within the selected sample.
+    </p>
+
+    {''.join(word_sections)
+    if word_sections
+    else
+    '<p>No word-level anomaly records were available for this sample.</p>'}
 
 </section>
 
@@ -3603,82 +4583,78 @@ else
      SECTION 9
      ====================================================== -->
 
-<section>
+<section id="gradcam">
 
-<h2>
-9. ResNet50 and Grad-CAM Explanation
-</h2>
+    <div class="section-header">
 
-<p>
+        <div class="section-number">09</div>
 
-Grad-CAM highlights image regions that contribute strongly to the
-ResNet50 handwriting representation. It provides visual localization
-of influential regions; it should not be interpreted as a direct
-gradient explanation of the final anomaly score.
+        <div>
+            <div class="eyebrow">Visual Explanation</div>
+            <h2>ResNet50 and Grad-CAM Explanation</h2>
+        </div>
 
-</p>
+    </div>
 
-<h3>
-Heatmap Interpretation
-</h3>
+    <p>
+        Grad-CAM highlights image regions that contribute strongly
+        to the ResNet50 handwriting representation.
+    </p>
 
-<div class="legend">
+    <p>
+        It provides visual localization of influential image
+        regions. Because the form-level ResNet50 features are cached
+        and the final anomaly score is produced by LOF in the
+        256-dimensional embedding space, the Grad-CAM visualization
+        should not be interpreted as a direct gradient explanation
+        of the LOF anomaly score.
+    </p>
 
-<div class="legend-item">
+    <h3>
+        Heatmap Interpretation
+    </h3>
 
-<div
-class="legend-box"
-style="background:#0000ff;"
-></div>
+    <div class="legend">
 
-Blue → lower activation
+        <div class="legend-item">
+            <div
+                class="legend-box"
+                style="background:#0000ff;"
+            ></div>
+            Blue — lower activation
+        </div>
 
-</div>
+        <div class="legend-item">
+            <div
+                class="legend-box"
+                style="background:#00ff00;"
+            ></div>
+            Green — moderate activation
+        </div>
 
-<div class="legend-item">
+        <div class="legend-item">
+            <div
+                class="legend-box"
+                style="background:#ffff00;"
+            ></div>
+            Yellow — stronger activation
+        </div>
 
-<div
-class="legend-box"
-style="background:#00ff00;"
-></div>
+        <div class="legend-item">
+            <div
+                class="legend-box"
+                style="background:#ff0000;"
+            ></div>
+            Red — highest activation
+        </div>
 
-Green → moderate activation
+    </div>
 
-</div>
-
-<div class="legend-item">
-
-<div
-class="legend-box"
-style="background:#ffff00;"
-></div>
-
-Yellow → stronger activation
-
-</div>
-
-<div class="legend-item">
-
-<div
-class="legend-box"
-style="background:#ff0000;"
-></div>
-
-Red → highest activation
-
-</div>
-
-</div>
-
-<p>
-
-The visualizations shown in this report are restricted to the exact
-sample and word IDs requested for
-<strong>
-{html_escape(sample_id)}
-</strong>.
-
-</p>
+    <p>
+        The visualizations shown in this report are restricted to
+        the exact sample and word IDs requested for
+        <strong>{html_escape(sample_id)}</strong>.
+    </p>
 
 </section>
 
@@ -3687,78 +4663,97 @@ sample and word IDs requested for
      SECTION 10
      ====================================================== -->
 
-<section>
+<section id="global-local">
 
-<h2>
-10. Global vs Local Evidence
-</h2>
+    <div class="section-header">
 
-<p>
+        <div class="section-number">10</div>
 
-The dataset-level comparison below provides context for the relationship
-between form-level ResNet50 anomaly scores and aggregate word-level
-anomaly measurements.
+        <div>
+            <div class="eyebrow">Evidence Comparison</div>
+            <h2>Global vs Local Evidence</h2>
+        </div>
 
-</p>
+    </div>
 
-{chart_section}
+    <p>
+        The comparison below examines the relationship between the
+        form-level LOF anomaly score and aggregate word-level
+        anomaly measurements.
+    </p>
 
-<p>
+    <p>
+        The LOF pathway operates on the learned 256-dimensional
+        form representation, while the word pathway uses individual
+        word features and robust reference distributions.
+    </p>
 
-<strong>
-ResNet percentile:
-</strong>
+    {chart_section}
 
-{format_percent(
-    rp,
-    1
-)}
+    <div class="evidence-grid">
 
-</p>
+        <div class="evidence-card">
 
-<p>
+            <span>LOF Percentile</span>
 
-<strong>
-Word anomaly percentile:
-</strong>
+            <strong>
+                {format_percent(lp, 1)}
+            </strong>
 
-{format_percent(
-    wp,
-    1
-)}
+        </div>
 
-</p>
+        <div class="evidence-card">
 
-<p>
+            <span>Word Anomaly Percentile</span>
 
-<strong>
-Agreement category:
-</strong>
+            <strong>
+                {format_percent(wp, 1)}
+            </strong>
 
-{html_escape(
-    agreement
-)}
+        </div>
 
-</p>
+        <div class="evidence-card">
 
-<p>
-{findings["relative_position"]}
-</p>
+            <span>Agreement Category</span>
 
-<div class="note">
+            <strong>
+                {html_escape(agreement)}
+            </strong>
 
-<strong>
-Combined research score:
-</strong>
+        </div>
 
-When available, this score is calculated using a 50/50
-percentile-based research heuristic combining the form-level
-ResNet anomaly percentile and word-level anomaly percentile.
+    </div>
 
-It is not a probability, confidence score, clinical severity score,
-or diagnostic measure.
+    <p>
+        {findings["relative_position"]}
+    </p>
 
-</div>
+    <div class="note">
+
+        <div class="status-icon">i</div>
+
+        <div>
+
+            <strong>
+                Global–Local Evidence Score
+            </strong>
+
+            <p>
+                When available, this score is calculated using a
+                50/50 percentile-based research heuristic combining
+                the form-level LOF anomaly percentile and the
+                word-level anomaly percentile.
+            </p>
+
+            <p>
+                It is intended to summarize agreement between two
+                evidence streams. It is not a probability, confidence
+                score, clinical severity score, or diagnostic measure.
+            </p>
+
+        </div>
+
+    </div>
 
 </section>
 
@@ -3767,59 +4762,68 @@ or diagnostic measure.
      SECTION 11
      ====================================================== -->
 
-<section>
+<section id="interpretation">
 
-<h2>
-11. Sample-Specific Findings and Interpretation
-</h2>
+    <div class="section-header">
 
-<h3>
-What is unusual?
-</h3>
+        <div class="section-number">11</div>
 
-<p>
-{findings["finding"]}
-</p>
+        <div>
+            <div class="eyebrow">Interpretation</div>
+            <h2>Sample-Specific Findings</h2>
+        </div>
 
-<h3>
-Where is the evidence?
-</h3>
+    </div>
 
-<p>
-{findings["word_pattern"]}
-</p>
+    <h3>What is unusual?</h3>
 
-<h3>
-How strong is the local evidence?
-</h3>
+    <p>
+        {findings["finding"]}
+    </p>
 
-<p>
-{findings["z_pattern"]}
-</p>
+    <h3>
+        Which form feature is most LOF-sensitive?
+    </h3>
 
-<h3>
-How do the two pipelines agree?
-</h3>
+    <p>
+        {findings["lof_feature_pattern"]}
+    </p>
 
-<p>
+    <h3>
+        Where is the local evidence?
+    </h3>
 
-The agreement category for this sample is
-<strong>
-{html_escape(agreement)}
-</strong>.
+    <p>
+        {findings["word_pattern"]}
+    </p>
 
-This category is dataset-relative and describes agreement between
-two anomaly-detection approaches rather than a clinical condition.
+    <h3>
+        How strong is the local evidence?
+    </h3>
 
-</p>
+    <p>
+        {findings["z_pattern"]}
+    </p>
 
-<h3>
-What this sample tells us
-</h3>
+    <h3>
+        How do the two pipelines agree?
+    </h3>
 
-<p>
-{findings["what_it_tells"]}
-</p>
+    <p>
+        The agreement category for this sample is
+        <strong>{html_escape(agreement)}</strong>.
+        This category is dataset-relative and describes agreement
+        between the LOF-based form-level analysis and the word-level
+        anomaly analysis rather than a clinical condition.
+    </p>
+
+    <h3>
+        What this sample tells us
+    </h3>
+
+    <p>
+        {findings["what_it_tells"]}
+    </p>
 
 </section>
 
@@ -3828,47 +4832,82 @@ What this sample tells us
      SECTION 12
      ====================================================== -->
 
-<section>
+<section id="limitations">
 
-<h2>
-12. Limitations
-</h2>
+    <div class="section-header">
 
-<ul>
+        <div class="section-number">12</div>
 
-<li>
-The IAM dataset primarily provides adult handwriting and does not
-provide reliable clinical dysgraphia labels for this pipeline.
-</li>
+        <div>
+            <div class="eyebrow">Research Boundaries</div>
+            <h2>Limitations</h2>
+        </div>
 
-<li>
-Anomaly scores indicate deviation from a reference distribution and
-are not diagnostic probabilities.
-</li>
+    </div>
 
-<li>
-Word-level counts can differ from form-level detected word counts
-because of filtering and segmentation rules.
-</li>
+    <ul>
 
-<li>
-Grad-CAM provides visual localization of influential ResNet50
-representation regions rather than a direct explanation of the
-final anomaly score.
-</li>
+        <li>
+            The IAM dataset primarily provides adult handwriting
+            and does not provide reliable clinical dysgraphia labels
+            for this pipeline.
+        </li>
 
-<li>
-The form-level feature attribution is a controlled sensitivity
-analysis and should not be interpreted as causal attribution.
-</li>
+        <li>
+            The form-level LOF score measures local outlier behaviour
+            in the learned embedding space and is not a diagnostic
+            probability.
+        </li>
 
-<li>
-The combined score is a research heuristic and requires validation
-on clinically labelled handwriting data before any diagnostic
-interpretation.
-</li>
+        <li>
+            The 0–100 normalized LOF score, where used, is a
+            dataset-relative normalization and should not be
+            interpreted as a percentage, probability, confidence,
+            or severity measure.
+        </li>
 
-</ul>
+        <li>
+            Word-level counts can differ from form-level detected
+            word counts because of filtering and segmentation rules.
+        </li>
+
+        <li>
+            Grad-CAM provides visual localization of influential
+            ResNet50 representation regions rather than a direct
+            explanation of the final LOF anomaly score.
+        </li>
+
+        <li>
+            LOF feature sensitivity is a controlled
+            one-feature-at-a-time perturbation analysis. It measures
+            sensitivity of the LOF score under feature replacement
+            and should not be interpreted as causal attribution.
+        </li>
+
+        <li>
+            The LOF sensitivity percentage represents the feature's
+            share of the total absolute LOF change measured across
+            the nine separate perturbations. It is not a probability,
+            confidence, severity, or diagnostic percentage.
+        </li>
+
+        <li>
+            The sensitivity analysis does not capture interactions
+            between multiple OpenCV features.
+        </li>
+
+        <li>
+            The Global–Local Evidence Score is a research heuristic
+            combining two percentile-based evidence streams.
+        </li>
+
+        <li>
+            The anomaly framework requires evaluation on clinically
+            labelled handwriting data before any clinical or
+            diagnostic interpretation could be considered.
+        </li>
+
+    </ul>
 
 </section>
 
@@ -3877,126 +4916,134 @@ interpretation.
      SECTION 13
      ====================================================== -->
 
-<section>
+<section id="conclusion">
 
-<h2>
-13. Sample-Specific Conclusion
-</h2>
+    <div class="section-header">
 
-<p>
+        <div class="section-number">13</div>
 
-For <strong>
-{html_escape(sample_id)}
-</strong>,
-the evidence indicates:
+        <div>
+            <div class="eyebrow">Final Summary</div>
+            <h2>Sample-Specific Conclusion</h2>
+        </div>
 
-</p>
+    </div>
 
-<ul>
+    <p>
+        For <strong>{html_escape(sample_id)}</strong>, the analysis
+        produced the following sample-specific evidence:
+    </p>
 
-<li>
+    <div class="summary-grid">
 
-<strong>
-Global evidence:
-</strong>
+        <div class="metric-card">
+            <span>LOF Form-Level Anomaly</span>
+            <strong>
+                {format_number(lof_score, 2)}
+            </strong>
+        </div>
 
-{format_number(
-    resnet,
-    2
-)}
+        <div class="metric-card">
+            <span>Mean Local Word Anomaly</span>
+            <strong>
+                {format_number(mean_word, 3)}
+            </strong>
+        </div>
 
-</li>
+        <div class="metric-card">
+            <span>Strongest Word Anomaly</span>
+            <strong>
+                {format_number(max_word, 3)}
+            </strong>
+        </div>
 
-<li>
+        <div class="metric-card">
+            <span>Most LOF-Sensitive Feature</span>
+            <strong>
+                {html_escape(
+                    findings["lof_feature_label"]
+                    or "Not available"
+                )}
+            </strong>
+        </div>
 
-<strong>
-Mean local word anomaly:
-</strong>
+        <div class="metric-card">
+            <span>LOF Feature Sensitivity</span>
+            <strong>
+                {format_percent(
+                    findings["lof_feature_sensitivity"],
+                    2,
+                )}
+            </strong>
+        </div>
 
-{format_number(
-    mean_word,
-    3
-)}
+        <div class="metric-card">
+            <span>Agreement</span>
+            <strong>
+                {html_escape(agreement)}
+            </strong>
+        </div>
 
-</li>
+    </div>
 
-<li>
+    <p>
+        {findings["what_it_tells"]}
+    </p>
 
-<strong>
-Strongest word anomaly:
-</strong>
+    <div class="note">
 
-{format_number(
-    max_word,
-    3
-)}
+        <div class="status-icon">i</div>
 
-</li>
+        <div>
 
-<li>
+            <strong>
+                Overall research interpretation
+            </strong>
 
-<strong>
-Agreement:
-</strong>
+            <p>
+                This report combines whole-form handwriting
+                representation, form-level LOF anomaly analysis,
+                handcrafted OpenCV measurements, LOF feature
+                sensitivity, local word-level anomaly evidence,
+                and visual ResNet50 explanation.
+            </p>
 
-{html_escape(
-    agreement
-)}
+            <p>
+                The system is intended as an explainable handwriting
+                anomaly-analysis framework and research tool, not as
+                a standalone clinical diagnostic system.
+            </p>
 
-</li>
+        </div>
 
-<li>
-
-<strong>
-Dominant local pattern:
-</strong>
-
-{html_escape(
-    findings[
-        "dominant_feature"
-    ]
-    or "Not available"
-)}
-
-</li>
-
-</ul>
-
-<p>
-{findings["what_it_tells"]}
-</p>
-
-<p>
-
-This report provides a sample-specific combination of global
-handwriting representation, handcrafted measurements, form-level
-feature sensitivity, local word-level anomaly evidence, and visual
-explanation.
-
-The system is intended as an explainable handwriting anomaly-analysis
-framework and research tool, not as a standalone clinical diagnostic
-system.
-
-</p>
+    </div>
 
 </section>
 
 
+<!-- ======================================================
+     FOOTER
+     ====================================================== -->
+
 <footer>
 
-<strong>
+    <div class="footer-title">
+        Explainable Handwriting Anomaly Detection
+    </div>
 
-Explainable Handwriting Anomaly Detection using
-ResNet50 and OpenCV Features
+    <div>
+        ResNet50 + OpenCV Features + Feature Fusion +
+        Attention + 256-D Embedding + LOF +
+        Word-Level Analysis + Grad-CAM
+    </div>
 
-</strong>
-
-<br>
-
-ResNet50 + OpenCV Features + Feature Fusion + Attention +
-Anomaly Detection + Word-Level Analysis + Grad-CAM
+    <div style="margin-top:10px;">
+        Sample-specific research report —
+        {html_escape(sample_id)}
+    </div>
 
 </footer>
+
 
 </div>
 
@@ -4024,7 +5071,7 @@ def main():
         "--sample_id",
         dest="sample_id",
         required=True,
-        help="IAM sample ID, e.g. a01-063",
+        help="IAM sample ID, e.g. l01-179",
     )
 
     args = parser.parse_args()
@@ -4054,7 +5101,7 @@ def main():
     ) = load_data()
 
     # --------------------------------------------------------
-    # Verify sample exists.
+    # Verify sample
     # --------------------------------------------------------
 
     sample_row = get_sample_row(
@@ -4076,32 +5123,32 @@ def main():
         return
 
     # --------------------------------------------------------
-    # Check attribution file.
+    # Load LOF sensitivity ONCE
     # --------------------------------------------------------
 
-    attribution_df, attribution_file = (
-        load_form_feature_attribution(
+    sensitivity_df, sensitivity_file = (
+        load_lof_feature_sensitivity(
             sample_id
         )
     )
 
-    if attribution_df.empty:
+    if sensitivity_df.empty:
 
         print(
             "WARNING:"
         )
 
         print(
-            "Form-level attribution file was "
+            "LOF feature sensitivity file was "
             "not found or could not be loaded."
         )
 
         print(
-            f"Expected:"
+            "Expected:"
         )
 
         print(
-            attribution_file
+            sensitivity_file
         )
 
         print()
@@ -4114,24 +5161,85 @@ def main():
     else:
 
         top_feature = safe_text(
-            attribution_df.iloc[0][
+            sensitivity_df.iloc[0].get(
                 "feature"
-            ],
-            "N/A"
+            ),
+            "N/A",
+        )
+
+        top_label = feature_label(
+            top_feature,
+            FORM_LOF_FEATURES,
+        )
+
+        # IMPORTANT:
+        # CURRENT CSV COLUMN NAMES
+
+        top_change = safe_float(
+            sensitivity_df.iloc[0].get(
+                "lof_score_change"
+            )
+        )
+
+        top_sensitivity = safe_float(
+            sensitivity_df.iloc[0].get(
+                "relative_lof_sensitivity_pct"
+            )
         )
 
         print(
-            "Form-level attribution loaded."
+            "LOF feature sensitivity loaded."
         )
 
         print(
-            f"Top feature: {top_feature}"
+            f"Most LOF-sensitive feature: "
+            f"{top_label}"
+        )
+
+        print(
+            f"LOF score change: "
+            f"{format_number(top_change, 6)}"
+        )
+
+        print(
+            f"Relative sensitivity: "
+            f"{format_percent(top_sensitivity, 2)}"
         )
 
         print()
 
     # --------------------------------------------------------
-    # Generate HTML.
+    # Verify LOF
+    # --------------------------------------------------------
+
+    lof_available = (
+        "lof_anomaly_score" in sample_row.index
+        or "lof_raw_anomaly" in sample_row.index
+    )
+
+    if not lof_available:
+
+        print(
+            "WARNING: LOF columns were not found "
+            "in the selected sample record."
+        )
+
+        print(
+            "Expected one of:"
+        )
+
+        print(
+            "  lof_anomaly_score"
+        )
+
+        print(
+            "  lof_raw_anomaly"
+        )
+
+        print()
+
+    # --------------------------------------------------------
+    # Generate
     # --------------------------------------------------------
 
     html_content = generate_html(
@@ -4142,10 +5250,11 @@ def main():
         word_summary,
         metadata,
         words_metadata,
+        lof_sensitivity_df=sensitivity_df,
     )
 
     # --------------------------------------------------------
-    # Save.
+    # Save
     # --------------------------------------------------------
 
     OUTPUT_DIR.mkdir(
@@ -4165,19 +5274,10 @@ def main():
     )
 
     print()
-    print(
-        "DONE."
-    )
-
+    print("DONE.")
     print()
-    print(
-        "Report generated:"
-    )
-
-    print(
-        output_file
-    )
-
+    print("Report generated:")
+    print(output_file)
     print()
     print("=" * 70)
 

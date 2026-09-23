@@ -1,9 +1,9 @@
-import os
 import torch
 import torch.nn as nn
+from torch.utils.data import Dataset, random_split
+from sklearn.neighbors import LocalOutlierFactor
 import pandas as pd
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
 
 from model import DysgraphiaModel
 
@@ -13,12 +13,13 @@ from model import DysgraphiaModel
 # ============================================================
 
 FEATURE_FILE = "../data/metadata/resnet_features.pt"
-
-MODEL_FILE = "../best_dysgraphia_encoder.pth"
-
+CHECKPOINT_FILE = "../best_dysgraphia_encoder.pth"
 OUTPUT_FILE = "../data/metadata/anomaly_scores.csv"
 
-BATCH_SIZE = 32
+VALIDATION_SPLIT = 0.2
+RANDOM_SEED = 42
+
+N_NEIGHBORS = 20
 
 DEVICE = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
@@ -38,17 +39,26 @@ class CachedFeatureDataset(Dataset):
             map_location="cpu"
         )
 
-        self.image_features = (
-            data["image_features"].float()
-        )
-
-        self.opencv_features = (
-            data["opencv_features"].float()
-        )
+        self.image_features = data["image_features"].float()
+        self.opencv_features = data["opencv_features"].float()
 
         self.sample_ids = data["sample_ids"]
-
         self.image_paths = data["image_paths"]
+
+        print(
+            f"Loaded cached features: "
+            f"{len(self.image_features)} samples"
+        )
+
+        print(
+            f"Image features: "
+            f"{self.image_features.shape}"
+        )
+
+        print(
+            f"OpenCV features: "
+            f"{self.opencv_features.shape}"
+        )
 
     def __len__(self):
         return len(self.image_features)
@@ -130,12 +140,9 @@ class CachedFusionModel(nn.Module):
 
         return {
             "embedding": embedding,
-
-            "projection": projection,
-
             "attention_weights":
                 attention_weights,
-
+            "projection": projection,
             "reconstructed_opencv":
                 reconstructed_opencv,
         }
@@ -151,28 +158,68 @@ dataset = CachedFeatureDataset(
     FEATURE_FILE
 )
 
-dataloader = DataLoader(
-    dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=False,
-    num_workers=0
-)
-
 print(
-    f"Loaded {len(dataset)} samples."
+    f"\nTotal samples: {len(dataset)}"
 )
 
 
 # ============================================================
-# Load Model
+# Reproduce EXACT training split
+# ============================================================
+
+validation_size = int(
+    len(dataset) * VALIDATION_SPLIT
+)
+
+training_size = (
+    len(dataset) - validation_size
+)
+
+generator = torch.Generator().manual_seed(
+    RANDOM_SEED
+)
+
+train_dataset, validation_dataset = random_split(
+    dataset,
+    [
+        training_size,
+        validation_size
+    ],
+    generator=generator
+)
+
+train_indices = train_dataset.indices
+validation_indices = validation_dataset.indices
+
+print("\nDataset split:")
+print("-" * 50)
+
+print(
+    f"Training samples: "
+    f"{len(train_indices)}"
+)
+
+print(
+    f"Validation samples: "
+    f"{len(validation_indices)}"
+)
+
+
+# ============================================================
+# Load trained model checkpoint
 # ============================================================
 
 print("\nLoading trained model...")
 
 checkpoint = torch.load(
-    MODEL_FILE,
+    CHECKPOINT_FILE,
     map_location=DEVICE
 )
+
+
+# ============================================================
+# Recreate model architecture
+# ============================================================
 
 original_model = DysgraphiaModel(
     pretrained=False,
@@ -181,21 +228,18 @@ original_model = DysgraphiaModel(
 
 model = CachedFusionModel(
     original_model
-)
+).to(DEVICE)
+
 
 model.load_state_dict(
     checkpoint["model_state_dict"]
 )
 
-model = model.to(DEVICE)
-
 model.eval()
-
-print("Model loaded successfully.")
 
 
 # ============================================================
-# Load Normalization Parameters
+# Load TRAINING normalization statistics
 # ============================================================
 
 feature_mean = checkpoint[
@@ -206,49 +250,44 @@ feature_std = checkpoint[
     "feature_std"
 ].float()
 
-feature_std[
-    feature_std < 1e-8
-] = 1.0
+print(
+    "\nLoaded OpenCV normalization "
+    "statistics from training."
+)
 
 
 # ============================================================
-# Generate Embeddings
+# Normalize OpenCV features
 # ============================================================
+
+normalized_opencv = (
+    dataset.opencv_features
+    - feature_mean
+) / feature_std
+
+
+# ============================================================
+# Generate 256-D embeddings
+# ============================================================
+
+print("\nGenerating 256-D embeddings...")
 
 all_embeddings = []
 
-all_sample_ids = []
-
-all_image_paths = []
-
-print("\nGenerating embeddings...")
-print("=" * 50)
-
-
 with torch.no_grad():
 
-    for batch_idx, batch in enumerate(
-        dataloader
-    ):
+    for index in range(len(dataset)):
 
-        image_features = batch[
-            "image_features"
-        ].to(DEVICE)
-
-        opencv_features = batch[
-            "opencv_features"
-        ]
-
-        # Apply same normalization
-        # used during training
+        image_features = (
+            dataset.image_features[index]
+            .unsqueeze(0)
+            .to(DEVICE)
+        )
 
         opencv_features = (
-            opencv_features
-            - feature_mean
-        ) / feature_std
-
-        opencv_features = (
-            opencv_features.to(DEVICE)
+            normalized_opencv[index]
+            .unsqueeze(0)
+            .to(DEVICE)
         )
 
         output = model(
@@ -256,155 +295,249 @@ with torch.no_grad():
             opencv_features
         )
 
-        embeddings = output[
-            "embedding"
-        ]
+        embedding = (
+            output["embedding"]
+            .squeeze(0)
+            .cpu()
+            .numpy()
+        )
 
         all_embeddings.append(
-            embeddings.cpu()
-        )
-
-        all_sample_ids.extend(
-            batch["sample_id"]
-        )
-
-        all_image_paths.extend(
-            batch["image_path"]
-        )
-
-        print(
-            f"Batch {batch_idx + 1}/"
-            f"{len(dataloader)}"
+            embedding
         )
 
 
-# ============================================================
-# Combine Embeddings
-# ============================================================
-
-embeddings = torch.cat(
-    all_embeddings,
-    dim=0
-)
-
-print("\nEmbedding shape:")
-print(embeddings.shape)
-
-
-# ============================================================
-# Calculate Reference Distribution
-# ============================================================
-
-print("\nCalculating reference distribution...")
-
-reference_embedding = embeddings.mean(
-    dim=0
+embedding_array = np.asarray(
+    all_embeddings
 )
 
 print(
-    "Reference embedding shape:",
-    reference_embedding.shape
+    f"Embedding matrix: "
+    f"{embedding_array.shape}"
 )
 
 
 # ============================================================
-# Calculate Anomaly Scores
+# Separate TRAIN and VALIDATION embeddings
 # ============================================================
 
-print("\nCalculating anomaly scores...")
-
-# Euclidean distance from the
-# reference embedding
-
-distances = torch.norm(
-    embeddings - reference_embedding,
-    dim=1
+train_embeddings = (
+    embedding_array[train_indices]
 )
 
-anomaly_scores = distances.numpy()
+validation_embeddings = (
+    embedding_array[validation_indices]
+)
+
+print(
+    f"Training embeddings: "
+    f"{train_embeddings.shape}"
+)
+
+print(
+    f"Validation embeddings: "
+    f"{validation_embeddings.shape}"
+)
 
 
 # ============================================================
-# Normalize Scores to 0-100
+# LOF MODEL
 # ============================================================
 
-min_score = anomaly_scores.min()
+n_neighbors = min(
+    N_NEIGHBORS,
+    len(train_embeddings) - 1
+)
 
-max_score = anomaly_scores.max()
+print("\nFitting LOF...")
+print(
+    f"LOF neighbours: {n_neighbors}"
+)
 
-if max_score > min_score:
+lof = LocalOutlierFactor(
+    n_neighbors=n_neighbors,
+    contamination="auto",
+    metric="euclidean",
+    novelty=True
+)
 
-    normalized_scores = (
-        (anomaly_scores - min_score)
+
+# ============================================================
+# FIT ONLY ON TRAINING EMBEDDINGS
+# ============================================================
+
+lof.fit(
+    train_embeddings
+)
+
+print(
+    "LOF fitted using training embeddings only."
+)
+
+
+# ============================================================
+# Score VALIDATION samples
+# ============================================================
+
+validation_normality_scores = (
+    lof.score_samples(
+        validation_embeddings
+    )
+)
+
+# sklearn's score_samples:
+# higher = more normal
+#
+# Reverse sign:
+# higher = more anomalous
+
+validation_anomaly_scores = (
+    -validation_normality_scores
+)
+
+
+# ============================================================
+# Normalize validation scores to 0-100
+# ============================================================
+
+score_min = (
+    validation_anomaly_scores.min()
+)
+
+score_max = (
+    validation_anomaly_scores.max()
+)
+
+if score_max > score_min:
+
+    validation_scores_0_100 = (
+        (
+            validation_anomaly_scores
+            - score_min
+        )
         /
-        (max_score - min_score)
-    ) * 100
+        (
+            score_max
+            - score_min
+        )
+        * 100
+    )
 
 else:
 
-    normalized_scores = np.zeros(
-        len(anomaly_scores)
+    validation_scores_0_100 = np.zeros(
+        len(validation_anomaly_scores)
     )
 
 
 # ============================================================
-# Create Results DataFrame
+# Create results
 # ============================================================
 
-results = pd.DataFrame({
+results = []
 
-    "sample_id":
-        all_sample_ids,
+for position, dataset_index in enumerate(
+    validation_indices
+):
 
-    "image_path":
-        all_image_paths,
+    results.append({
 
-    "anomaly_score":
-        anomaly_scores,
+        "sample_id":
+            dataset.sample_ids[
+                dataset_index
+            ],
 
-    "anomaly_score_0_100":
-        normalized_scores,
-})
+        "image_path":
+            dataset.image_paths[
+                dataset_index
+            ],
+
+        "dataset_split":
+            "validation",
+
+        "anomaly_score":
+            float(
+                validation_anomaly_scores[
+                    position
+                ]
+            ),
+
+        "anomaly_score_0_100":
+            float(
+                validation_scores_0_100[
+                    position
+                ]
+            ),
+
+        "lof_score_samples":
+            float(
+                validation_normality_scores[
+                    position
+                ]
+            ),
+
+        "lof_n_neighbors":
+            n_neighbors
+    })
 
 
 # ============================================================
-# Sort by Anomaly Score
+# Sort by anomaly score
 # ============================================================
 
-results = results.sort_values(
-    by="anomaly_score",
+results_df = pd.DataFrame(
+    results
+)
+
+results_df = results_df.sort_values(
+    "anomaly_score",
     ascending=False
-)
+).reset_index(drop=True)
 
 
 # ============================================================
-# Save Results
+# Save
 # ============================================================
 
-os.makedirs(
-    os.path.dirname(OUTPUT_FILE),
-    exist_ok=True
-)
-
-results.to_csv(
+results_df.to_csv(
     OUTPUT_FILE,
     index=False
 )
 
 
 # ============================================================
-# Display Results
+# Display results
 # ============================================================
 
 print("\n")
 print("=" * 60)
-print("ANOMALY DETECTION RESULTS")
+print("LOF VALIDATION RESULTS")
 print("=" * 60)
 
-print("\nMost unusual samples:")
+print(
+    f"Samples scored: "
+    f"{len(results_df)}"
+)
 
 print(
-    results[
+    f"Mean anomaly score: "
+    f"{results_df['anomaly_score'].mean():.6f}"
+)
+
+print(
+    f"Minimum anomaly score: "
+    f"{results_df['anomaly_score'].min():.6f}"
+)
+
+print(
+    f"Maximum anomaly score: "
+    f"{results_df['anomaly_score'].max():.6f}"
+)
+
+print("\nTop 10 validation samples:")
+
+print(
+    results_df[
         [
             "sample_id",
             "anomaly_score",
@@ -415,47 +548,10 @@ print(
     )
 )
 
-
-print("\nMost typical samples:")
-
-print(
-    results[
-        [
-            "sample_id",
-            "anomaly_score",
-            "anomaly_score_0_100"
-        ]
-    ].tail(10).to_string(
-        index=False
-    )
-)
-
-
 print("\n")
-print("=" * 60)
-
 print(
-    f"Results saved to:\n{OUTPUT_FILE}"
+    f"Results saved to:\n"
+    f"{OUTPUT_FILE}"
 )
 
-print(
-    f"\nTotal samples evaluated: "
-    f"{len(results)}"
-)
-
-print(
-    f"Minimum anomaly score: "
-    f"{anomaly_scores.min():.4f}"
-)
-
-print(
-    f"Maximum anomaly score: "
-    f"{anomaly_scores.max():.4f}"
-)
-
-print(
-    f"Mean anomaly score: "
-    f"{anomaly_scores.mean():.4f}"
-)
-
-print("=" * 60)
+print("\nEvaluation completed.")

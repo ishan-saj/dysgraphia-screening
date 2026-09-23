@@ -10,7 +10,7 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-RESNET_FILE = (
+LOF_FILE = (
     PROJECT_ROOT
     / "data"
     / "metadata"
@@ -46,9 +46,9 @@ def main():
     # Check files
     # --------------------------------------------------------
 
-    if not RESNET_FILE.exists():
+    if not LOF_FILE.exists():
         print("\nERROR: anomaly_scores.csv not found.")
-        print(RESNET_FILE)
+        print(LOF_FILE)
         return
 
     if not WORD_FILE.exists():
@@ -57,17 +57,21 @@ def main():
         return
 
     # --------------------------------------------------------
-    # Load
+    # Load LOF form-level scores
     # --------------------------------------------------------
 
-    print("\nLoading sample-level ResNet anomaly scores...")
+    print("\nLoading form-level LOF anomaly scores...")
 
-    resnet = pd.read_csv(RESNET_FILE)
+    lof = pd.read_csv(LOF_FILE)
 
     print(
-        f"ResNet samples: "
-        f"{len(resnet)}"
+        f"LOF samples: "
+        f"{len(lof)}"
     )
+
+    # --------------------------------------------------------
+    # Load word-level summaries
+    # --------------------------------------------------------
 
     print("\nLoading word-level sample summaries...")
 
@@ -79,20 +83,18 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Detect ResNet score columns
+    # Display columns
     # --------------------------------------------------------
 
-    print("\nResNet columns:")
-    print(list(resnet.columns))
+    print("\nLOF columns:")
+    print(list(lof.columns))
 
     print("\nWord columns:")
     print(list(word.columns))
 
-    # Existing evaluate.py normally creates:
-    #
-    # sample_id
-    # raw_anomaly_score
-    # normalized_anomaly_score
+    # --------------------------------------------------------
+    # Detect LOF score columns
+    # --------------------------------------------------------
 
     possible_raw = [
         "raw_anomaly_score",
@@ -109,7 +111,7 @@ def main():
         (
             column
             for column in possible_raw
-            if column in resnet.columns
+            if column in lof.columns
         ),
         None
     )
@@ -118,21 +120,21 @@ def main():
         (
             column
             for column in possible_normalized
-            if column in resnet.columns
+            if column in lof.columns
         ),
         None
     )
 
     if raw_column is None:
         print(
-            "\nERROR: Could not find raw ResNet "
+            "\nERROR: Could not find raw LOF "
             "anomaly score column."
         )
         return
 
     if normalized_column is None:
         print(
-            "\nERROR: Could not find normalized ResNet "
+            "\nERROR: Could not find normalized LOF "
             "anomaly score column."
         )
         return
@@ -141,10 +143,13 @@ def main():
     # Rename for clarity
     # --------------------------------------------------------
 
-    resnet = resnet.rename(
+    lof = lof.rename(
         columns={
-            raw_column: "resnet_raw_anomaly",
-            normalized_column: "resnet_anomaly_score",
+            raw_column:
+                "lof_raw_anomaly",
+
+            normalized_column:
+                "lof_anomaly_score",
         }
     )
 
@@ -155,7 +160,7 @@ def main():
     print("\nMerging datasets...")
 
     merged = pd.merge(
-        resnet,
+        lof,
         word,
         on="sample_id",
         how="inner"
@@ -171,14 +176,23 @@ def main():
     # --------------------------------------------------------
 
     print("\nMissing values:")
+
+    check_columns = [
+        "lof_anomaly_score",
+        "mean_word_anomaly",
+        "maximum_word_anomaly",
+        "top_5_mean_anomaly",
+    ]
+
+    available_check_columns = [
+        column
+        for column in check_columns
+        if column in merged.columns
+    ]
+
     print(
         merged[
-            [
-                "resnet_anomaly_score",
-                "mean_word_anomaly",
-                "maximum_word_anomaly",
-                "top_5_mean_anomaly",
-            ]
+            available_check_columns
         ]
         .isna()
         .sum()
@@ -204,7 +218,7 @@ def main():
 
     print("\n")
     print("=" * 65)
-    print("CORRELATION WITH RESNET ANOMALY")
+    print("CORRELATION WITH LOF ANOMALY")
     print("=" * 65)
 
     correlations = []
@@ -215,7 +229,7 @@ def main():
             continue
 
         x = pd.to_numeric(
-            merged["resnet_anomaly_score"],
+            merged["lof_anomaly_score"],
             errors="coerce"
         )
 
@@ -256,8 +270,8 @@ def main():
     # Percentile ranks
     # --------------------------------------------------------
 
-    merged["resnet_rank_percentile"] = (
-        merged["resnet_anomaly_score"]
+    merged["lof_rank_percentile"] = (
+        merged["lof_anomaly_score"]
         .rank(pct=True)
         * 100
     )
@@ -279,14 +293,16 @@ def main():
     # --------------------------------------------------------
     #
     # Both systems are converted to percentile ranks.
-    # Therefore neither raw scale dominates the other.
     #
-    # 50% ResNet
-    # 50% word-level mean
+    # 50% form-level LOF evidence
+    # 50% word-level evidence
     #
+    # This is a relative evidence-integration score.
+    # It is NOT a probability or diagnosis.
+    # --------------------------------------------------------
 
     merged["combined_anomaly_score"] = (
-        0.5 * merged["resnet_rank_percentile"]
+        0.5 * merged["lof_rank_percentile"]
         +
         0.5 * merged["word_rank_percentile"]
     )
@@ -297,21 +313,21 @@ def main():
 
     def classify(row):
 
-        resnet_high = (
-            row["resnet_rank_percentile"] >= 75
+        lof_high = (
+            row["lof_rank_percentile"] >= 75
         )
 
         word_high = (
             row["word_rank_percentile"] >= 75
         )
 
-        if resnet_high and word_high:
+        if lof_high and word_high:
             return "High in both"
 
-        if resnet_high and not word_high:
-            return "High ResNet only"
+        if lof_high and not word_high:
+            return "High LOF only"
 
-        if word_high and not resnet_high:
+        if word_high and not lof_high:
             return "High word anomaly only"
 
         return "Low/moderate in both"
@@ -362,7 +378,7 @@ def main():
     display_columns = [
         "combined_rank",
         "sample_id",
-        "resnet_anomaly_score",
+        "lof_anomaly_score",
         "mean_word_anomaly",
         "maximum_word_anomaly",
         "top_5_mean_anomaly",
@@ -370,9 +386,15 @@ def main():
         "anomaly_agreement",
     ]
 
+    available_display_columns = [
+        column
+        for column in display_columns
+        if column in merged.columns
+    ]
+
     print(
         merged[
-            display_columns
+            available_display_columns
         ]
         .head(20)
         .to_string(
@@ -399,23 +421,23 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Top ResNet samples
+    # Top LOF samples
     # --------------------------------------------------------
 
     print("\n")
     print("=" * 65)
-    print("TOP 10 RESNET ANOMALY SAMPLES")
+    print("TOP 10 LOF ANOMALY SAMPLES")
     print("=" * 65)
 
     print(
         merged
         .sort_values(
-            "resnet_anomaly_score",
+            "lof_anomaly_score",
             ascending=False
         )[
             [
                 "sample_id",
-                "resnet_anomaly_score",
+                "lof_anomaly_score",
                 "mean_word_anomaly",
                 "combined_anomaly_score",
             ]
@@ -446,7 +468,7 @@ def main():
                 "mean_word_anomaly",
                 "maximum_word_anomaly",
                 "top_5_mean_anomaly",
-                "resnet_anomaly_score",
+                "lof_anomaly_score",
             ]
         ]
         .head(10)
@@ -465,7 +487,7 @@ def main():
     print("=" * 65)
 
     print(
-        f"\nFinal samples: "
+        f"\nFinal merged samples: "
         f"{len(merged)}"
     )
 
