@@ -1,0 +1,5 @@
+model,overall_roc_auc,overall_pr_auc,ci_95_low,ci_95_high,blur_auc,dropout_auc,thickening_auc,thinning_auc
+Page-Level Alone,0.6208,0.6435,0.5327,0.7055,0.6128,0.6376,0.6742,0.5442
+Line-Level Alone,0.3307,0.4657,0.2489,0.4059,0.3895,0.3231,0.2664,0.3584
+Word-Level Alone,0.3841,0.4893,0.2975,0.4699,0.4621,0.3335,0.3386,0.4112
+Hierarchical Fusion (0.90P+0.10L+-0.00W),0.5754,0.6108,0.4861,0.6641,0.564,0.6007,0.6168,0.5092

@@ -1,0 +1,81 @@
+subject_id,source_form,anomaly_type,severity_level,severity_label,parameter_description,mask_pixels,anomaly_score
+Subj_blur_01,k02-023,blur,0,Clean (L0),Level 0: Clean (Unperturbed),6790,5.255389
+Subj_blur_01,k02-023,blur,1,Mild (L1),Gaussian Blur (k=3x3),6790,5.254057
+Subj_blur_01,k02-023,blur,2,Moderate (L2),Gaussian Blur (k=7x7),6790,5.245528
+Subj_blur_01,k02-023,blur,3,Strong (L3),Gaussian Blur (k=15x15),6790,5.20338
+Subj_blur_02,b01-027,blur,0,Clean (L0),Level 0: Clean (Unperturbed),5542,7.901015
+Subj_blur_02,b01-027,blur,1,Mild (L1),Gaussian Blur (k=3x3),5542,7.892999
+Subj_blur_02,b01-027,blur,2,Moderate (L2),Gaussian Blur (k=7x7),5542,7.883139
+Subj_blur_02,b01-027,blur,3,Strong (L3),Gaussian Blur (k=15x15),5542,7.894818
+Subj_blur_03,c03-000a,blur,0,Clean (L0),Level 0: Clean (Unperturbed),3090,7.387612
+Subj_blur_03,c03-000a,blur,1,Mild (L1),Gaussian Blur (k=3x3),3090,7.340754
+Subj_blur_03,c03-000a,blur,2,Moderate (L2),Gaussian Blur (k=7x7),3090,7.261917
+Subj_blur_03,c03-000a,blur,3,Strong (L3),Gaussian Blur (k=15x15),3090,7.183279
+Subj_blur_04,a03-066,blur,0,Clean (L0),Level 0: Clean (Unperturbed),9215,10.908106
+Subj_blur_04,a03-066,blur,1,Mild (L1),Gaussian Blur (k=3x3),9215,10.913111
+Subj_blur_04,a03-066,blur,2,Moderate (L2),Gaussian Blur (k=7x7),9215,10.909303
+Subj_blur_04,a03-066,blur,3,Strong (L3),Gaussian Blur (k=15x15),9215,10.951136
+Subj_blur_05,g06-026l,blur,0,Clean (L0),Level 0: Clean (Unperturbed),6390,8.75543
+Subj_blur_05,g06-026l,blur,1,Mild (L1),Gaussian Blur (k=3x3),6390,8.759212
+Subj_blur_05,g06-026l,blur,2,Moderate (L2),Gaussian Blur (k=7x7),6390,8.706095
+Subj_blur_05,g06-026l,blur,3,Strong (L3),Gaussian Blur (k=15x15),6390,8.707499
+Subj_dropout_01,c06-058,dropout,0,Clean (L0),Level 0: Clean (Unperturbed),4905,7.705615
+Subj_dropout_01,c06-058,dropout,1,Mild (L1),Missing Stroke Dropout (5% area),4905,7.710449
+Subj_dropout_01,c06-058,dropout,2,Moderate (L2),Missing Stroke Dropout (15% area),4905,7.689484
+Subj_dropout_01,c06-058,dropout,3,Strong (L3),Missing Stroke Dropout (30% area),4905,7.699409
+Subj_dropout_02,b01-136,dropout,0,Clean (L0),Level 0: Clean (Unperturbed),18445,4.676967
+Subj_dropout_02,b01-136,dropout,1,Mild (L1),Missing Stroke Dropout (5% area),18445,4.651343
+Subj_dropout_02,b01-136,dropout,2,Moderate (L2),Missing Stroke Dropout (15% area),18445,4.652305
+Subj_dropout_02,b01-136,dropout,3,Strong (L3),Missing Stroke Dropout (30% area),18445,4.719867
+Subj_dropout_03,l07-085,dropout,0,Clean (L0),Level 0: Clean (Unperturbed),10909,6.211409
+Subj_dropout_03,l07-085,dropout,1,Mild (L1),Missing Stroke Dropout (5% area),10909,6.178743
+Subj_dropout_03,l07-085,dropout,2,Moderate (L2),Missing Stroke Dropout (15% area),10909,6.217113
+Subj_dropout_03,l07-085,dropout,3,Strong (L3),Missing Stroke Dropout (30% area),10909,6.291947
+Subj_dropout_04,g06-026h,dropout,0,Clean (L0),Level 0: Clean (Unperturbed),5313,9.27863
+Subj_dropout_04,g06-026h,dropout,1,Mild (L1),Missing Stroke Dropout (5% area),5313,9.263608
+Subj_dropout_04,g06-026h,dropout,2,Moderate (L2),Missing Stroke Dropout (15% area),5313,9.31381
+Subj_dropout_04,g06-026h,dropout,3,Strong (L3),Missing Stroke Dropout (30% area),5313,9.706292
+Subj_dropout_05,a06-152,dropout,0,Clean (L0),Level 0: Clean (Unperturbed),4754,7.745482
+Subj_dropout_05,a06-152,dropout,1,Mild (L1),Missing Stroke Dropout (5% area),4754,7.777121
+Subj_dropout_05,a06-152,dropout,2,Moderate (L2),Missing Stroke Dropout (15% area),4754,7.788922
+Subj_dropout_05,a06-152,dropout,3,Strong (L3),Missing Stroke Dropout (30% area),4754,7.787775
+Subj_thickening_01,b05-098,thickening,0,Clean (L0),Level 0: Clean (Unperturbed),22541,6.121001
+Subj_thickening_01,b05-098,thickening,1,Mild (L1),"Dilation/Tremor (k=2x2, iter=1)",22541,6.13522
+Subj_thickening_01,b05-098,thickening,2,Moderate (L2),"Dilation/Tremor (k=3x3, iter=1)",22541,6.118177
+Subj_thickening_01,b05-098,thickening,3,Strong (L3),"Dilation/Tremor (k=3x3, iter=2)",22541,5.616536
+Subj_thickening_02,d01-024,thickening,0,Clean (L0),Level 0: Clean (Unperturbed),9497,6.780615
+Subj_thickening_02,d01-024,thickening,1,Mild (L1),"Dilation/Tremor (k=2x2, iter=1)",9497,6.805591
+Subj_thickening_02,d01-024,thickening,2,Moderate (L2),"Dilation/Tremor (k=3x3, iter=1)",9497,6.833246
+Subj_thickening_02,d01-024,thickening,3,Strong (L3),"Dilation/Tremor (k=3x3, iter=2)",9497,6.834737
+Subj_thickening_03,f07-028b,thickening,0,Clean (L0),Level 0: Clean (Unperturbed),9812,10.551245
+Subj_thickening_03,f07-028b,thickening,1,Mild (L1),"Dilation/Tremor (k=2x2, iter=1)",9812,10.511955
+Subj_thickening_03,f07-028b,thickening,2,Moderate (L2),"Dilation/Tremor (k=3x3, iter=1)",9812,10.46147
+Subj_thickening_03,f07-028b,thickening,3,Strong (L3),"Dilation/Tremor (k=3x3, iter=2)",9812,10.408909
+Subj_thickening_04,a02-116,thickening,0,Clean (L0),Level 0: Clean (Unperturbed),7080,3.188833
+Subj_thickening_04,a02-116,thickening,1,Mild (L1),"Dilation/Tremor (k=2x2, iter=1)",7080,3.128256
+Subj_thickening_04,a02-116,thickening,2,Moderate (L2),"Dilation/Tremor (k=3x3, iter=1)",7080,3.114633
+Subj_thickening_04,a02-116,thickening,3,Strong (L3),"Dilation/Tremor (k=3x3, iter=2)",7080,3.050158
+Subj_thickening_05,d01-016,thickening,0,Clean (L0),Level 0: Clean (Unperturbed),13855,8.154795
+Subj_thickening_05,d01-016,thickening,1,Mild (L1),"Dilation/Tremor (k=2x2, iter=1)",13855,8.065432
+Subj_thickening_05,d01-016,thickening,2,Moderate (L2),"Dilation/Tremor (k=3x3, iter=1)",13855,8.238022
+Subj_thickening_05,d01-016,thickening,3,Strong (L3),"Dilation/Tremor (k=3x3, iter=2)",13855,8.232321
+Subj_thinning_01,m04-222,thinning,0,Clean (L0),Level 0: Clean (Unperturbed),5144,7.166735
+Subj_thinning_01,m04-222,thinning,1,Mild (L1),"Erosion/Faint Stroke (k=2x2, iter=1)",5144,7.238166
+Subj_thinning_01,m04-222,thinning,2,Moderate (L2),"Erosion/Faint Stroke (k=3x3, iter=1)",5144,7.222624
+Subj_thinning_01,m04-222,thinning,3,Strong (L3),"Erosion/Faint Stroke (k=3x3, iter=2)",5144,7.192233
+Subj_thinning_02,g06-042d,thinning,0,Clean (L0),Level 0: Clean (Unperturbed),3070,7.971037
+Subj_thinning_02,g06-042d,thinning,1,Mild (L1),"Erosion/Faint Stroke (k=2x2, iter=1)",3070,7.945367
+Subj_thinning_02,g06-042d,thinning,2,Moderate (L2),"Erosion/Faint Stroke (k=3x3, iter=1)",3070,7.957213
+Subj_thinning_02,g06-042d,thinning,3,Strong (L3),"Erosion/Faint Stroke (k=3x3, iter=2)",3070,7.89983
+Subj_thinning_03,h07-054a,thinning,0,Clean (L0),Level 0: Clean (Unperturbed),5334,7.126779
+Subj_thinning_03,h07-054a,thinning,1,Mild (L1),"Erosion/Faint Stroke (k=2x2, iter=1)",5334,7.135123
+Subj_thinning_03,h07-054a,thinning,2,Moderate (L2),"Erosion/Faint Stroke (k=3x3, iter=1)",5334,7.121225
+Subj_thinning_03,h07-054a,thinning,3,Strong (L3),"Erosion/Faint Stroke (k=3x3, iter=2)",5334,7.064582
+Subj_thinning_04,p02-081,thinning,0,Clean (L0),Level 0: Clean (Unperturbed),2150,11.721571
+Subj_thinning_04,p02-081,thinning,1,Mild (L1),"Erosion/Faint Stroke (k=2x2, iter=1)",2150,11.758441
+Subj_thinning_04,p02-081,thinning,2,Moderate (L2),"Erosion/Faint Stroke (k=3x3, iter=1)",2150,11.782415
+Subj_thinning_04,p02-081,thinning,3,Strong (L3),"Erosion/Faint Stroke (k=3x3, iter=2)",2150,11.775235
+Subj_thinning_05,m04-030,thinning,0,Clean (L0),Level 0: Clean (Unperturbed),21512,8.125168
+Subj_thinning_05,m04-030,thinning,1,Mild (L1),"Erosion/Faint Stroke (k=2x2, iter=1)",21512,7.978168
+Subj_thinning_05,m04-030,thinning,2,Moderate (L2),"Erosion/Faint Stroke (k=3x3, iter=1)",21512,8.032108
+Subj_thinning_05,m04-030,thinning,3,Strong (L3),"Erosion/Faint Stroke (k=3x3, iter=2)",21512,8.134504

@@ -3,6 +3,8 @@ import argparse
 import base64
 import html
 import re
+import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
@@ -1457,7 +1459,13 @@ def get_dataset_percentiles(
 
             row = sample_rows.iloc[0]
 
-            if "lof_anomaly_score" in master.columns:
+            if "resnet_rank_percentile" in row and np.isfinite(safe_float(row.get("resnet_rank_percentile"))):
+
+                result["lof_percentile"] = safe_float(
+                    row.get("resnet_rank_percentile")
+                )
+
+            elif "lof_anomaly_score" in master.columns:
 
                 result["lof_percentile"] = (
                     percentile_rank(
@@ -1479,6 +1487,32 @@ def get_dataset_percentiles(
                         ),
                         master[
                             "lof_raw_anomaly"
+                        ],
+                    )
+                )
+
+            elif "resnet_raw_anomaly" in master.columns:
+
+                result["lof_percentile"] = (
+                    percentile_rank(
+                        row.get(
+                            "resnet_raw_anomaly"
+                        ),
+                        master[
+                            "resnet_raw_anomaly"
+                        ],
+                    )
+                )
+
+            elif "resnet_anomaly_score" in master.columns:
+
+                result["lof_percentile"] = (
+                    percentile_rank(
+                        row.get(
+                            "resnet_anomaly_score"
+                        ),
+                        master[
+                            "resnet_anomaly_score"
                         ],
                     )
                 )
@@ -2622,6 +2656,16 @@ def create_word_section(
         "comparison",
     )
 
+    position_text = ""
+    try:
+        parts = word_id.split("-")
+        if len(parts) >= 4:
+            line_idx = int(parts[-2])
+            word_idx = int(parts[-1])
+            position_text = f"Line {line_idx + 1}, Word {word_idx + 1}"
+    except Exception:
+        pass
+
     return f"""
     <div class="word-card">
 
@@ -2629,7 +2673,10 @@ def create_word_section(
 
             <div>
                 <div class="word-rank">#{rank}</div>
-                <h3>{html_escape(word)}</h3>
+                <h3>
+                    {html_escape(word)}
+                    {f'<span class="instance-pill">{html_escape(position_text)}</span>' if position_text else ''}
+                </h3>
             </div>
 
             <div class="word-score">
@@ -2644,6 +2691,11 @@ def create_word_section(
             <span>
                 <strong>Word ID</strong>
                 {html_escape(word_id)}
+            </span>
+
+            <span>
+                <strong>Form Location</strong>
+                {html_escape(position_text if position_text else 'N/A')}
             </span>
 
             <span>
@@ -2755,6 +2807,30 @@ def generate_html(
             row.get("lof_raw_anomaly")
         )
 
+    if not np.isfinite(lof_score):
+
+        lof_score = safe_float(
+            row.get("resnet_raw_anomaly")
+        )
+
+    if not np.isfinite(lof_score):
+
+        lof_score = safe_float(
+            row.get("anomaly_score")
+        )
+
+    if not np.isfinite(lof_score):
+
+        lof_score = safe_float(
+            row.get("lof_score_samples")
+        )
+
+    if not np.isfinite(lof_score):
+
+        lof_score = safe_float(
+            row.get("resnet_anomaly_score")
+        )
+
     mean_word = safe_float(
         row.get("mean_word_anomaly")
     )
@@ -2773,12 +2849,21 @@ def generate_html(
 
     if not np.isfinite(combined):
 
+        master_lof_series = []
+        for col_cand in [
+            "lof_anomaly_score",
+            "lof_raw_anomaly",
+            "resnet_raw_anomaly",
+            "anomaly_score",
+            "resnet_anomaly_score",
+        ]:
+            if col_cand in master.columns:
+                master_lof_series = master[col_cand]
+                break
+
         lp_temp = percentile_rank(
             lof_score,
-            master.get(
-                "lof_anomaly_score",
-                [],
-            ),
+            master_lof_series,
         )
 
         wp_temp = percentile_rank(
@@ -3725,6 +3810,23 @@ tbody tr:hover {{
 .word-card-header h3 {{
     margin: 2px 0 0;
     font-size: 23px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}}
+
+.instance-pill {{
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    color: #2563eb;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    padding: 3px 9px;
+    border-radius: 9999px;
+    letter-spacing: 0.2px;
+    vertical-align: middle;
 }}
 
 .word-rank {{
@@ -4568,7 +4670,10 @@ footer {{
 
     <p>
         The following words are ranked by their word-level anomaly
-        score within the selected sample.
+        score within the selected sample. Note that ranking operates at the
+        physical word-crop instance level: recurring vocabulary words
+        written across different lines represent separate handwriting motor
+        executions with distinct bounding boxes and stroke geometry.
     </p>
 
     {''.join(word_sections)
@@ -5091,6 +5196,26 @@ def main():
 
     print()
 
+    # --------------------------------------------------------
+    # Automatically generate word Grad-CAM visuals if missing
+    # --------------------------------------------------------
+    explain_dir = get_sample_explainability_folder(sample_id)
+    if not explain_dir.exists() or len(list(explain_dir.glob("*_original.png"))) == 0:
+        gradcam_script = Path(__file__).resolve().parent / "word_gradcam.py"
+        if gradcam_script.exists():
+            print(f"Generating word Grad-CAM visuals for '{sample_id}'...")
+            subprocess.run([sys.executable, str(gradcam_script), "--sample", sample_id], check=False)
+
+    # --------------------------------------------------------
+    # Automatically generate LOF feature sensitivity if missing
+    # --------------------------------------------------------
+    sensitivity_csv = METADATA_DIR / f"{safe_filename(sample_id)}_lof_feature_sensitivity.csv"
+    if not sensitivity_csv.exists():
+        attr_script = Path(__file__).resolve().parent / "form_feature_attribution.py"
+        if attr_script.exists():
+            print(f"Generating LOF feature sensitivity for '{sample_id}'...")
+            subprocess.run([sys.executable, str(attr_script), sample_id], check=False)
+
     (
         master,
         anomaly,
@@ -5215,6 +5340,9 @@ def main():
     lof_available = (
         "lof_anomaly_score" in sample_row.index
         or "lof_raw_anomaly" in sample_row.index
+        or "resnet_raw_anomaly" in sample_row.index
+        or "anomaly_score" in sample_row.index
+        or "resnet_anomaly_score" in sample_row.index
     )
 
     if not lof_available:
@@ -5229,11 +5357,15 @@ def main():
         )
 
         print(
+            "  resnet_raw_anomaly"
+        )
+
+        print(
             "  lof_anomaly_score"
         )
 
         print(
-            "  lof_raw_anomaly"
+            "  anomaly_score"
         )
 
         print()

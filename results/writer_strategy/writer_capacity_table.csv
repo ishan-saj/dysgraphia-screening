@@ -1,0 +1,11 @@
+min_forms_per_writer,eligible_writers,pct_of_all_writers,total_forms_covered,pct_forms_covered,feasible_for_lof_k5
+1,657,100.0,1539,100.0,No (requires >= 6 forms)
+2,301,45.81,1183,76.87,No (requires >= 6 forms)
+3,159,24.2,899,58.41,No (requires >= 6 forms)
+4,127,19.33,803,52.18,No (requires >= 6 forms)
+5,93,14.16,667,43.34,No (requires >= 6 forms)
+6,39,5.94,397,25.8,Yes
+8,33,5.02,357,23.2,Yes
+10,13,1.98,179,11.63,Yes
+15,1,0.15,59,3.83,Yes
+20,1,0.15,59,3.83,Yes

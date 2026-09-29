@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import torch
 from torch.utils.data import DataLoader
@@ -10,10 +11,12 @@ from dataset import DysgraphiaDataset
 # Configuration
 # ============================================================
 
-METADATA_CSV = "../data/metadata/metadata_all.csv"
-IMAGE_ROOT = "../data/raw/IAM/images"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-OUTPUT_FILE = "../data/metadata/resnet_features.pt"
+METADATA_CSV = PROJECT_ROOT / "data" / "metadata" / "metadata_all.csv"
+IMAGE_ROOT = PROJECT_ROOT / "data" / "raw" / "IAM" / "images"
+
+OUTPUT_FILE = PROJECT_ROOT / "data" / "metadata" / "resnet_features.pt"
 
 BATCH_SIZE = 16
 NUM_WORKERS = 0

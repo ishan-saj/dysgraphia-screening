@@ -199,3 +199,6 @@ __pycache__/
 
 # Generated analysis outputs
 data/
+
+# Local uncropped backup
+results_backup_uncropped/

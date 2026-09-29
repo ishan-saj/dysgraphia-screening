@@ -1,0 +1,2 @@
+reference_forms,reference_writers,unseen_clean_forms,unseen_clean_writers,synthetic_anomaly_forms,reference_score_mean,reference_score_std,unseen_clean_score_mean,unseen_clean_score_std,synthetic_score_mean,synthetic_score_std,threshold_p90,threshold_p95,threshold_p99,unseen_clean_fpr_at_p90,unseen_clean_fpr_at_p95,unseen_clean_fpr_at_p99,synthetic_tpr_at_p90,synthetic_tpr_at_p95,synthetic_tpr_at_p99
+1095,459,444,198,1000,-0.4307,0.1368,-0.4105,0.146,-0.3682,0.2212,-0.287,-0.2048,0.0692,0.1149,0.0743,0.0158,0.18,0.11,0.044

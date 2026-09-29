@@ -1,0 +1,32 @@
+{
+    "protocol": "Unsupervised One-Class Anomaly Detection Benchmark",
+    "dataset": {
+        "name": "IAM Offline Handwriting Database",
+        "clean_forms": 1539,
+        "clean_writers": 657,
+        "synthetic_forms": 1000,
+        "synthetic_slices": {
+            "blur": 221,
+            "dropout": 250,
+            "thickening": 253,
+            "thinning": 276
+        },
+        "total_evaluation_samples": 2539
+    },
+    "feature_dimensions": {
+        "Devi & Kavya (2023)": "640-D (128-D 2D-DCT + 512-D ResNet-18)",
+        "Agarwal et al. (2023)": "8-D Handcrafted Geometric/Visual",
+        "Alevizos et al. (2024)": "6-D Handcrafted Geometric Features",
+        "Proposed k-NN & LOF": "256-D Fused Multimodal Embedding (ResNet-50 + 9-D OpenCV via FeatureAttention)"
+    },
+    "scoring_parameters": {
+        "Devi & Kavya (2023)": "Regularized Mahalanobis Distance (cov_reg=1e-4, pinv)",
+        "Agarwal et al. (2023)": "OneClassSVM (kernel=rbf, nu=0.05, gamma=scale)",
+        "Alevizos et al. (2024)": "Conv1D-LSTM Autoencoder (20 epochs, lr=1e-3, MSE Loss)",
+        "Proposed k-NN": "Leave-One-Out Euclidean k-NN (k=5)",
+        "Proposed Adaptive LOF": "Leave-One-Out Local Outlier Factor (k=5, metric=minkowski/euclidean)"
+    },
+    "locked_status": "LOCKED - ESTABLISHED IN PHASE 1",
+    "date_established": "2026-09-25",
+    "random_seed": 42
+}

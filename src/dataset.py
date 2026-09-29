@@ -41,6 +41,9 @@ class DysgraphiaDataset(Dataset):
         image_root=None,
         image_size=224,
         transform=None,
+        crop_handwriting_only=True,
+        padding=30,
+        bboxes_csv=None,
     ):
         """
         Parameters
@@ -56,6 +59,16 @@ class DysgraphiaDataset(Dataset):
 
         transform : optional
             Future image transformation pipeline.
+
+        crop_handwriting_only : bool
+            If True, automatically crops the image to isolate genuine handwriting,
+            discarding the printed prompt text header and signature footer.
+
+        padding : int
+            Padding in pixels around the handwriting bounding box.
+
+        bboxes_csv : str or Path, optional
+            Path to form_handwriting_bboxes.csv.
         """
 
         self.metadata_csv = Path(metadata_csv)
@@ -68,10 +81,41 @@ class DysgraphiaDataset(Dataset):
 
         self.image_size = image_size
         self.transform = transform
+        self.crop_handwriting_only = crop_handwriting_only
+        self.padding = padding
+        self.handwriting_bboxes = {}
+
+        if self.crop_handwriting_only:
+            project_root = Path(__file__).resolve().parent.parent
+            bbox_path = (
+                Path(bboxes_csv)
+                if bboxes_csv
+                else project_root / "data" / "metadata" / "form_handwriting_bboxes.csv"
+            )
+            if bbox_path.exists():
+                bbox_df = pd.read_csv(bbox_path)
+                for _, r in bbox_df.iterrows():
+                    self.handwriting_bboxes[str(r["form_id"]).strip()] = (
+                        int(r["x1"]),
+                        int(r["y1"]),
+                        int(r["x2"]),
+                        int(r["y2"]),
+                    )
+                print(
+                    f"Loaded {len(self.handwriting_bboxes)} handwriting bounding boxes for cropping."
+                )
+            else:
+                print(
+                    f"Notice: Bbox file not found at {bbox_path}. Running without handwriting crop."
+                )
 
         # --------------------------------------------------
         # Load CSV
         # --------------------------------------------------
+
+        project_root = Path(__file__).resolve().parent.parent
+        if not self.metadata_csv.exists() and (project_root / self.metadata_csv).exists():
+            self.metadata_csv = project_root / self.metadata_csv
 
         if not self.metadata_csv.exists():
             raise FileNotFoundError(
@@ -293,7 +337,7 @@ class DysgraphiaDataset(Dataset):
     # Load and preprocess image
     # --------------------------------------------------
 
-    def _load_image(self, image_path):
+    def _load_image(self, image_path, form_id=None):
 
         # Read grayscale
         image = cv2.imread(
@@ -306,6 +350,24 @@ class DysgraphiaDataset(Dataset):
                 f"OpenCV could not read image:\n"
                 f"{image_path}"
             )
+
+        # --------------------------------------------------
+        # Crop pure handwriting (exclude printed prompt text)
+        # --------------------------------------------------
+        lookup_key = str(form_id).strip() if form_id else None
+        if (
+            self.crop_handwriting_only
+            and lookup_key
+            and lookup_key in self.handwriting_bboxes
+        ):
+            x1, y1, x2, y2 = self.handwriting_bboxes[lookup_key]
+            img_h, img_w = image.shape[:2]
+            crop_x1 = max(0, x1 - self.padding)
+            crop_y1 = max(0, y1 - self.padding)
+            crop_x2 = min(img_w, x2 + self.padding)
+            crop_y2 = min(img_h, y2 + self.padding)
+            if crop_y2 > crop_y1 and crop_x2 > crop_x1:
+                image = image[crop_y1:crop_y2, crop_x1:crop_x2]
 
         # --------------------------------------------------
         # Resize to 224 × 224
@@ -391,11 +453,18 @@ class DysgraphiaDataset(Dataset):
         image_path = self._find_image(row)
 
         # --------------------------------------------------
-        # Load image
+        # Load image (cropped to pure handwriting)
         # --------------------------------------------------
 
+        form_id = str(
+            row.get("form_id", sample_id)
+        ).strip()
+
         image_tensor, mask_tensor = (
-            self._load_image(image_path)
+            self._load_image(
+                image_path,
+                form_id=form_id
+            )
         )
 
         # --------------------------------------------------
@@ -432,3 +501,62 @@ class DysgraphiaDataset(Dataset):
             "image_path":
                 str(image_path),
         }
+
+
+def crop_handwriting_region(
+    image,
+    form_id,
+    padding=30,
+    bboxes_csv=None
+):
+    """
+    Crops an IAM form image to only the genuine handwriting region,
+    discarding printed prompt headers, instructions, and name footers.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image (grayscale or RGB/BGR).
+    form_id : str
+        IAM form identifier (e.g. 'a01-000u').
+    padding : int
+        Padding in pixels around handwriting bounds.
+    bboxes_csv : str or Path, optional
+        Path to form_handwriting_bboxes.csv.
+
+    Returns
+    -------
+    np.ndarray
+        Cropped image containing only the handwriting.
+    """
+
+    project_root = Path(__file__).resolve().parent.parent
+    bbox_path = (
+        Path(bboxes_csv)
+        if bboxes_csv
+        else project_root / "data" / "metadata" / "form_handwriting_bboxes.csv"
+    )
+
+    if not bbox_path.exists():
+        return image
+
+    bbox_df = pd.read_csv(bbox_path)
+    match = bbox_df[
+        bbox_df["form_id"] == str(form_id).strip()
+    ]
+
+    if match.empty:
+        return image
+
+    row = match.iloc[0]
+    img_h, img_w = image.shape[:2]
+
+    x1 = max(0, int(row["x1"]) - padding)
+    y1 = max(0, int(row["y1"]) - padding)
+    x2 = min(img_w, int(row["x2"]) + padding)
+    y2 = min(img_h, int(row["y2"]) + padding)
+
+    if y2 > y1 and x2 > x1:
+        return image[y1:y2, x1:x2]
+
+    return image

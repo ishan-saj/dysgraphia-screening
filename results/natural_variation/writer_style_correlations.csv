@@ -1,0 +1,10 @@
+feature,label,pearson_r,pearson_p,spearman_rho,spearman_p
+slant_angle,Slant Angle,-0.0922,0.052208,-0.0406,0.393409
+word_spacing_cv,Word Spacing CV,0.0099,0.834985,-0.0475,0.318345
+stroke_density,Stroke Density,0.0008,0.986457,0.0491,0.301873
+character_height_cv,Character Height CV,-0.0572,0.229356,-0.1118,0.018462
+average_word_width,Average Word Width,-0.0436,0.359227,-0.0027,0.953988
+average_word_height,Average Word Height,-0.0959,0.043422,-0.0552,0.245328
+baseline_deviation,Baseline Deviation,-0.1288,0.006563,-0.1398,0.00315
+skew,Skew,0.015,0.752268,0.0182,0.702619
+writing_area,Writing Area,-0.1916,4.8e-05,-0.0802,0.091309

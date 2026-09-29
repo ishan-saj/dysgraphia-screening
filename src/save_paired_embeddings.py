@@ -31,6 +31,21 @@ OUTPUT_FILE = (
 
 DEVICE = torch.device("cpu")
 
+BBOX_FILE = PROJECT_ROOT / "data" / "metadata" / "form_handwriting_bboxes.csv"
+HANDWRITING_BBOXES = {}
+if BBOX_FILE.exists():
+    bbox_df = pd.read_csv(BBOX_FILE)
+    for _, r in bbox_df.iterrows():
+        HANDWRITING_BBOXES[str(r["form_id"]).strip()] = (
+            int(r["x1"]),
+            int(r["y1"]),
+            int(r["x2"]),
+            int(r["y2"]),
+        )
+    print(
+        f"Loaded {len(HANDWRITING_BBOXES)} bounding boxes for synthetic handwriting cropping."
+    )
+
 
 # ============================================================
 # FORM ID MAP
@@ -139,7 +154,7 @@ class CachedFusionModel(nn.Module):
 # IMAGE LOADING
 # ============================================================
 
-def load_image(path):
+def load_image(path, source_form=None, padding=30):
 
     image = cv2.imread(
         str(path),
@@ -151,6 +166,17 @@ def load_image(path):
         raise RuntimeError(
             f"Could not read image: {path}"
         )
+
+    # Crop to pure handwriting if bounding box exists
+    if source_form and str(source_form).strip() in HANDWRITING_BBOXES:
+        x1, y1, x2, y2 = HANDWRITING_BBOXES[str(source_form).strip()]
+        img_h, img_w = image.shape[:2]
+        crop_x1 = max(0, x1 - padding)
+        crop_y1 = max(0, y1 - padding)
+        crop_x2 = min(img_w, x2 + padding)
+        crop_y2 = min(img_h, y2 + padding)
+        if crop_y2 > crop_y1 and crop_x2 > crop_x1:
+            image = image[crop_y1:crop_y2, crop_x1:crop_x2]
 
     image = cv2.resize(
         image,
@@ -179,10 +205,11 @@ def load_image(path):
 # RESNET FEATURE
 # ============================================================
 
-def get_resnet_feature(model, path):
+def get_resnet_feature(model, path, source_form=None):
 
     image = load_image(
-        path
+        path,
+        source_form=source_form
     ).unsqueeze(0)
 
     mean = torch.tensor(
@@ -430,10 +457,11 @@ for index, row in synthetic.iterrows():
             ).name
         )
 
-    # ResNet feature
+    # ResNet feature (cropped to pure handwriting)
     image_feature = get_resnet_feature(
         resnet,
-        image_path
+        image_path,
+        source_form=source_form
     )
 
     image_feature = (

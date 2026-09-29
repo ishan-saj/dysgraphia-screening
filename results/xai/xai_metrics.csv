@@ -1,0 +1,6 @@
+anomaly_type,standard_IAR_mean,standard_IAR_std,standard_BSR_mean,standard_AAR_mean,standard_pointing_game_acc,constrained_IAR_mean,constrained_AAR_mean,constrained_pointing_game_acc
+Blur,0.0264,0.0137,0.9736,0.0168,0.0,1.0,0.0092,0.0
+Dropout,0.0229,0.01,0.9771,0.0529,0.0,1.0,0.0,0.0
+Thickening,0.0319,0.0121,0.9681,0.0332,0.0,1.0,0.0256,0.0
+Thinning,0.0216,0.0054,0.9784,0.0378,0.0,1.0,0.0154,0.0
+Overall (All Slices),0.0257,0.0108,0.9743,0.0352,0.0,1.0,0.0125,0.0

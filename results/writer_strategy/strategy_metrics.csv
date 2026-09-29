@@ -1,0 +1,4 @@
+strategy,coverage_scope,mathematical_feasibility,overall_roc_auc,overall_pr_auc,multi_writer_subset_auc,decision
+Universal Adaptive LOF (Proposed),"Full Dataset (100% Writers, N=657)",100% Feasible,0.6248,0.5152,0.6598,SELECTED (Primary Recommended Strategy)
+Style-Cluster Adaptive LOF (K=5),"Full Dataset (100% Writers, N=657)",100% Feasible,0.6187,0.5221,0.6351,VIABLE ALTERNATIVE (Stylistic Stratification)
+Writer-Specific LOF (k=5),"Restricted Subset (Only 5.8% Writers, N=38)",FAILED for 94.2% of writers (N < 6 forms),,,0.5,REJECTED (Mathematically Infeasible on IAM)
