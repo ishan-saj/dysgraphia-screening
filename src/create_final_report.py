@@ -5172,16 +5172,26 @@ def main():
     )
 
     parser.add_argument(
+        "pos_sample_id",
+        nargs="?",
+        default=None,
+        help="Optional positional IAM sample ID or image filename, e.g. a01-000u or a01-000u.png",
+    )
+
+    parser.add_argument(
         "--sample",
         "--sample_id",
         dest="sample_id",
-        required=True,
-        help="IAM sample ID, e.g. l01-179",
+        default=None,
+        help="IAM sample ID or image filename, e.g. a01-000u or a01-000u.png (defaults to a01-000u)",
     )
 
     args = parser.parse_args()
 
-    sample_id = args.sample_id.strip()
+    raw_sample = args.sample_id or args.pos_sample_id or "a01-000u"
+    sample_id = str(raw_sample).strip()
+    if sample_id.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")) or "/" in sample_id or "\\" in sample_id:
+        sample_id = Path(sample_id).stem.strip()
 
     print("=" * 70)
     print(

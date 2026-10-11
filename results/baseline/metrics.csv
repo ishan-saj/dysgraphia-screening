@@ -1,6 +1,6 @@
-model,overall_roc_auc,overall_pr_auc,threshold_95pct_clean,tn,fp,fn,tp,false_positive_rate,sensitivity_recall,precision,f1_score,blur_auc,dropout_auc,thickening_auc,thinning_auc
-Devi & Kavya (2023) [DCT + ResNet-18],0.527568,0.421596,29.53658,1462,77,920,80,0.05,0.08,0.5096,0.1383,0.522842,0.554003,0.541077,0.495025
-Agarwal et al. (2023) [Faithful Reimplementation],0.505149,0.399777,4.7e-05,1462,77,940,60,0.05,0.06,0.438,0.1055,0.49101,0.491404,0.52822,0.507771
-Alevizos et al. (2024) [Adapted Autoencoder],0.512323,0.405056,2.330127,1462,77,944,56,0.05,0.056,0.4211,0.0989,0.502462,0.514946,0.521121,0.509777
-Proposed Method (Ablation: k-NN),0.591192,0.460527,0.246152,1462,77,949,51,0.05,0.051,0.3984,0.0904,0.600249,0.589991,0.582189,0.593282
-Proposed Method (Upgraded: Adaptive LOF),0.696754,0.607982,-0.149661,1462,77,792,208,0.05,0.208,0.7298,0.3237,0.70475,0.700073,0.704528,0.680218
+Method,Verification Status,Feature Space,Overall AUC,Overall AP,Blur AUC,Dropout AUC,Thickening AUC,Thinning AUC
+Devi & Kavya (2023) [DCT + ResNet-18],Kekre-DCT frequency features (128-D) + ResNet-18 (512-D) [640-D] -> Mahalanobis distance,8x8 DCT (128-D) + ResNet-18 (512-D) [640-D],0.5655601039636128,0.4329816248928064,0.5963309900358404,0.516246913580247,0.5692791119945964,0.5821797515797007
+Agarwal et al. (2023) [Faithful Reimplementation],Faithful reimplementation (Features 1-6 verified; Features 7-8 OCR unavailable),8 paper features (visual geometric + OCR status),0.5819090318388563,0.4772078421712103,0.6264675010805041,0.5249538661468486,0.5950414390536435,0.5857817517492068
+Alevizos et al. (2024) [Adapted Autoencoder],Architecture & features adapted from supervised 4-class model into unsupervised L2 scorer,"6 handwriting features (deviation, connectivity, density, slant, width, height)",0.6065633528265107,0.4997694708633098,0.5933937827642679,0.6006705653021442,0.6304989893853357,0.6005052217231216
+Proposed Method (Ablation: k-NN),Proposed hybrid architecture with standard local density metric (parent-excluded),Fused cross-attention visual-geometric embedding [256-D],0.6241052631578947,0.48505912016040864,0.6787933046962975,0.5462196231319038,0.628493169683101,0.6468415402435235
+Proposed Method (Upgraded: Adaptive LOF),Proposed hybrid architecture with adaptive local outlier factor (LOO evaluation),Fused cross-attention visual-geometric embedding [256-D],0.6552043534762833,0.5669069925009018,0.7320643657072965,0.5742884990253412,0.6728318013596427,0.6507955005603111

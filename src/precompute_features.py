@@ -154,11 +154,16 @@ opencv_features = torch.cat(
 # Save
 # ============================================================
 
+assert not torch.isnan(image_features).any() and not torch.isinf(image_features).any(), "NaN/Inf in clean image_features!"
+assert not torch.isnan(opencv_features).any() and not torch.isinf(opencv_features).any(), "NaN/Inf in clean opencv_features!"
+
 feature_data = {
     "image_features": image_features,
     "opencv_features": opencv_features,
     "sample_ids": all_sample_ids,
     "image_paths": all_image_paths,
+    "cropped": bool(dataset.crop_handwriting_only),
+    "crop_mode": "handwriting_bbox_p30",
 }
 
 

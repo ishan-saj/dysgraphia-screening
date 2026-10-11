@@ -45,6 +45,15 @@ CHECKPOINT_FILE = (
 # COMMAND LINE
 # ============================================================
 
+def normalize_sample_id(raw_id: str) -> str:
+    s = str(raw_id).strip()
+    if s.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
+        s = Path(s).stem
+    elif "/" in s or "\\" in s:
+        s = Path(s).stem
+    return s.strip()
+
+
 parser = argparse.ArgumentParser(
     description=(
         "Generate sample-specific word-level "
@@ -53,16 +62,24 @@ parser = argparse.ArgumentParser(
 )
 
 parser.add_argument(
+    "pos_sample_id",
+    nargs="?",
+    default=None,
+    help="Optional positional Sample ID or image filename, e.g. a01-000u or a01-000u.png"
+)
+
+parser.add_argument(
     "--sample_id",
     "--sample",
     dest="sample_id",
-    required=True,
-    help="Sample ID, e.g. a01-063 or j06-051"
+    default=None,
+    help="Sample ID or image filename, e.g. a01-000u or a01-000u.png (defaults to a01-000u)"
 )
 
 args = parser.parse_args()
 
-SAMPLE_ID = str(args.sample_id).strip()
+raw_sample = args.sample_id or args.pos_sample_id or "a01-000u"
+SAMPLE_ID = normalize_sample_id(raw_sample)
 
 
 # ============================================================
@@ -131,9 +148,12 @@ metadata_df["sample_id"] = (
     .astype(str)
     .str.strip()
 )
+if "form_id" in metadata_df.columns:
+    metadata_df["form_id"] = metadata_df["form_id"].astype(str).str.strip()
 
 sample_rows = metadata_df[
-    metadata_df["sample_id"] == SAMPLE_ID
+    (metadata_df["sample_id"].str.lower() == SAMPLE_ID.lower())
+    | (metadata_df.get("form_id", metadata_df["sample_id"]).str.lower() == SAMPLE_ID.lower())
 ].copy()
 
 
@@ -146,6 +166,7 @@ if sample_rows.empty:
 
 
 sample_metadata = sample_rows.iloc[0]
+SAMPLE_ID = str(sample_metadata["form_id"] if "form_id" in sample_metadata.index else sample_metadata["sample_id"]).strip()
 
 
 if "image_path" not in sample_metadata.index:

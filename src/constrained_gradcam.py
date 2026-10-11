@@ -27,8 +27,14 @@ from model import DysgraphiaModel
 # ============================================================
 # CONFIGURATION
 # ============================================================
+import argparse
 
-SAMPLE_ID = "a01-063"
+_parser = argparse.ArgumentParser(description="Refined ink-constrained Grad-CAM.")
+_parser.add_argument("pos_sample_id", nargs="?", default=None, help="Sample ID or filename")
+_parser.add_argument("--sample", "--sample_id", dest="sample_id", default=None, help="Sample ID or filename")
+_args, _ = _parser.parse_known_args()
+_raw_sample = _args.sample_id or _args.pos_sample_id or "a01-063"
+SAMPLE_ID = Path(str(_raw_sample).strip()).stem if (str(_raw_sample).lower().endswith((".png", ".jpg", ".jpeg", ".bmp")) or "/" in str(_raw_sample) or "\\" in str(_raw_sample)) else str(_raw_sample).strip()
 
 IMAGE_ROOT = (
     BASE_DIR

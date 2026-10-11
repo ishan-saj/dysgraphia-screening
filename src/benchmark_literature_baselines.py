@@ -136,10 +136,13 @@ def check_ocr_availability():
         return False, str(e)
 
 
+from dataset import load_handwriting_crop, resize_handwriting_crop, fold_angle_45
+
+
 def extract_agarwal_features_single(img: np.ndarray, ocr_available: bool = False) -> np.ndarray:
     """
     Extract features from Agarwal et al. (SN Comput Sci, 2023):
-    1. Baseline angle variance (cv2.minAreaRect on dilated lines, height >= 20px)
+    1. Baseline angle variance (cv2.minAreaRect on dilated lines, height >= 20px, folded into [-45, 45])
     2. Pen pressure (mean of non-zero inverted thresholded pixels)
     3. Slant angle (shear transforms at -45 to 45 deg, max squared density)
     4. Letter size irregularity (horizontal projection run-length std)
@@ -149,9 +152,8 @@ def extract_agarwal_features_single(img: np.ndarray, ocr_available: bool = False
     8. Irregular capitalization (intermediate caps) -> Flagged if OCR unavailable
     """
     h, w = img.shape
-    # Scale for consistent fast computation
     scale = 1000.0 / h
-    img_scaled = cv2.resize(img, (int(w * scale), 1000))
+    img_scaled = cv2.resize(img, (int(w * scale), 1000), interpolation=cv2.INTER_AREA)
 
     # Preprocessing
     filtered = cv2.bilateralFilter(img_scaled, d=7, sigmaColor=50, sigmaSpace=50)
@@ -160,13 +162,13 @@ def extract_agarwal_features_single(img: np.ndarray, ocr_available: bool = False
     dilated = cv2.dilate(bin_inv, kernel, iterations=2)
     contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # 1. Baseline angle variance
+    # 1. Baseline angle variance (folded into [-45, 45] to avoid minAreaRect wraparound)
     angles = []
     for c in contours:
         x, y, cw, ch = cv2.boundingRect(c)
         if ch >= int(20 * scale) and cw >= int(50 * scale):
             rect = cv2.minAreaRect(c)
-            angles.append(rect[-1])
+            angles.append(fold_angle_45(rect[-1]))
     f1 = float(np.var(angles)) if len(angles) > 1 else 0.0
 
     # 2. Pen pressure
@@ -179,7 +181,7 @@ def extract_agarwal_features_single(img: np.ndarray, ocr_available: bool = False
     shear_angles = [-45, -30, -15, -5, 0, 5, 15, 30, 45]
     best_angle = 0
     max_sq = -1
-    small_bin = cv2.resize(bin_inv, (int(w * scale) // 2, 500))
+    small_bin = cv2.resize(bin_inv, (int(w * scale) // 2, 500), interpolation=cv2.INTER_AREA)
     sh_h, sh_w = small_bin.shape
     for theta in shear_angles:
         rad = np.radians(theta)
@@ -220,44 +222,64 @@ def extract_agarwal_features_single(img: np.ndarray, ocr_available: bool = False
     return np.array([f1, f2, f3, f4, f5, f6, f7, f8], dtype=np.float32)
 
 
-def get_or_extract_agarwal_features(clean_image_paths, synth_image_paths):
-    """Extract or load cached features for Agarwal et al."""
+def get_or_extract_agarwal_features(clean_image_paths, synth_image_paths, clean_form_ids=None, synth_source_forms=None):
+    """Extract or load cached features for Agarwal et al. using shared handwriting crop."""
     if AGARWAL_CACHE.exists():
         print(f"  [Cache] Loading cached Agarwal features from: {AGARWAL_CACHE.name}")
-        data = np.load(AGARWAL_CACHE)
+        data = np.load(AGARWAL_CACHE, allow_pickle=True)
+        assert "cropped" in data.files and bool(data["cropped"]) is True, (
+            f"Refusing to run: {AGARWAL_CACHE} is missing cropped=True flag!"
+        )
+        assert "interp" in data.files and str(data["interp"]) == "INTER_AREA", (
+            f"Refusing to run: {AGARWAL_CACHE} is missing interp='INTER_AREA' flag!"
+        )
         return data["clean_features"], data["synth_features"]
 
-    print("  Extracting Agarwal et al. (2023) 8 features from raw images...")
+    if clean_form_ids is None or synth_source_forms is None:
+        raise ValueError("clean_form_ids and synth_source_forms are required to extract cropped Agarwal features.")
+
+    print("  Extracting Agarwal et al. (2023) 8 features from CROPPED handwriting images...")
     ocr_ok, ocr_msg = check_ocr_availability()
     print(f"  [Integrity Check] OCR Status: {ocr_ok} ({ocr_msg})")
     if not ocr_ok:
         print("  [Notice] Tesseract OCR is unavailable. Features 7 (Spelling errors) and 8 (Irregular capitalization) default to 0.0.")
 
     clean_feats = []
-    for i, p in enumerate(clean_image_paths):
+    for i, (p, fid) in enumerate(zip(clean_image_paths, clean_form_ids)):
         full_p = PROJECT_ROOT / p
         img = cv2.imread(str(full_p), cv2.IMREAD_GRAYSCALE)
         if img is None:
             raise FileNotFoundError(f"Missing clean image: {full_p}")
-        clean_feats.append(extract_agarwal_features_single(img, ocr_available=ocr_ok))
+        img_cropped = load_handwriting_crop(fid, img)
+        clean_feats.append(extract_agarwal_features_single(img_cropped, ocr_available=ocr_ok))
         if (i + 1) % 500 == 0 or (i + 1) == len(clean_image_paths):
             print(f"    Clean forms: {i+1}/{len(clean_image_paths)}")
 
     synth_feats = []
-    for i, p in enumerate(synth_image_paths):
+    for i, (p, sfid) in enumerate(zip(synth_image_paths, synth_source_forms)):
         full_p = PROJECT_ROOT / p
         img = cv2.imread(str(full_p), cv2.IMREAD_GRAYSCALE)
         if img is None:
             raise FileNotFoundError(f"Missing synthetic image: {full_p}")
-        synth_feats.append(extract_agarwal_features_single(img, ocr_available=ocr_ok))
+        img_cropped = load_handwriting_crop(sfid, img)
+        synth_feats.append(extract_agarwal_features_single(img_cropped, ocr_available=ocr_ok))
         if (i + 1) % 500 == 0 or (i + 1) == len(synth_image_paths):
             print(f"    Synthetic forms: {i+1}/{len(synth_image_paths)}")
 
     clean_feats = np.array(clean_feats, dtype=np.float32)
     synth_feats = np.array(synth_feats, dtype=np.float32)
+    assert not np.isnan(clean_feats).any() and not np.isinf(clean_feats).any(), "NaN/Inf in clean Agarwal features!"
+    assert not np.isnan(synth_feats).any() and not np.isinf(synth_feats).any(), "NaN/Inf in synth Agarwal features!"
 
-    np.savez(AGARWAL_CACHE, clean_features=clean_feats, synth_features=synth_feats)
-    print(f"  [Cache] Saved Agarwal features to: {AGARWAL_CACHE.name}")
+    np.savez(
+        AGARWAL_CACHE,
+        clean_features=clean_feats,
+        synth_features=synth_feats,
+        cropped=np.array(True),
+        crop_mode=np.array("handwriting_bbox_p30"),
+        interp=np.array("INTER_AREA"),
+    )
+    print(f"  [Cache] Saved cropped Agarwal features to: {AGARWAL_CACHE.name}")
     return clean_feats, synth_feats
 
 
@@ -268,8 +290,10 @@ def extract_devi_kavya_features_single(img: np.ndarray, r18_model: nn.Module) ->
     2. Pool mean and std of DCT coefficients across blocks (128-D).
     3. ResNet18 penultimate layer features (512-D).
     Concatenation = 640-D vector.
+    Uses shared resize_handwriting_crop (cv2.INTER_AREA).
     """
-    img_224 = cv2.resize(img, (224, 224)).astype(np.float32) / 255.0
+    resized_u8 = resize_handwriting_crop(img, size=224)
+    img_224 = resized_u8.astype(np.float32) / 255.0
     h, w = img_224.shape
 
     # Vectorized 8x8 block 2D DCT
@@ -279,7 +303,7 @@ def extract_devi_kavya_features_single(img: np.ndarray, r18_model: nn.Module) ->
     dct_feat = np.concatenate([d2_flat.mean(axis=0), d2_flat.std(axis=0)])  # 128-D
 
     # ResNet18 penultimate layer
-    rgb_224 = cv2.cvtColor(cv2.resize(img, (224, 224)), cv2.COLOR_GRAY2RGB)
+    rgb_224 = cv2.cvtColor(resized_u8, cv2.COLOR_GRAY2RGB)
     t = torch.from_numpy(rgb_224).permute(2, 0, 1).unsqueeze(0).float() / 255.0
     mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
     std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
@@ -289,43 +313,63 @@ def extract_devi_kavya_features_single(img: np.ndarray, r18_model: nn.Module) ->
     return np.concatenate([dct_feat, cnn_feat]).astype(np.float32)  # 640-D
 
 
-def get_or_extract_devi_kavya_features(clean_image_paths, synth_image_paths):
-    """Extract or load cached features for Devi & Kavya."""
+def get_or_extract_devi_kavya_features(clean_image_paths, synth_image_paths, clean_form_ids=None, synth_source_forms=None):
+    """Extract or load cached features for Devi & Kavya using shared handwriting crop."""
     if DEVI_KAVYA_CACHE.exists():
         print(f"  [Cache] Loading cached Devi & Kavya features from: {DEVI_KAVYA_CACHE.name}")
-        data = np.load(DEVI_KAVYA_CACHE)
+        data = np.load(DEVI_KAVYA_CACHE, allow_pickle=True)
+        assert "cropped" in data.files and bool(data["cropped"]) is True, (
+            f"Refusing to run: {DEVI_KAVYA_CACHE} is missing cropped=True flag!"
+        )
+        assert "interp" in data.files and str(data["interp"]) == "INTER_AREA", (
+            f"Refusing to run: {DEVI_KAVYA_CACHE} is missing interp='INTER_AREA' flag!"
+        )
         return data["clean_features"], data["synth_features"]
 
-    print("  Extracting Devi & Kavya (2023) [8x8 DCT (128-D) + ResNet18 (512-D)]...")
+    if clean_form_ids is None or synth_source_forms is None:
+        raise ValueError("clean_form_ids and synth_source_forms are required to extract cropped Devi & Kavya features.")
+
+    print("  Extracting Devi & Kavya (2023) [8x8 DCT (128-D) + ResNet18 (512-D)] from CROPPED handwriting images...")
     r18 = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
     r18.fc = nn.Identity()
     r18.eval()
 
     clean_feats = []
-    for i, p in enumerate(clean_image_paths):
+    for i, (p, fid) in enumerate(zip(clean_image_paths, clean_form_ids)):
         full_p = PROJECT_ROOT / p
         img = cv2.imread(str(full_p), cv2.IMREAD_GRAYSCALE)
         if img is None:
             raise FileNotFoundError(f"Missing clean image: {full_p}")
-        clean_feats.append(extract_devi_kavya_features_single(img, r18))
+        img_cropped = load_handwriting_crop(fid, img)
+        clean_feats.append(extract_devi_kavya_features_single(img_cropped, r18))
         if (i + 1) % 500 == 0 or (i + 1) == len(clean_image_paths):
             print(f"    Clean forms: {i+1}/{len(clean_image_paths)}")
 
     synth_feats = []
-    for i, p in enumerate(synth_image_paths):
+    for i, (p, sfid) in enumerate(zip(synth_image_paths, synth_source_forms)):
         full_p = PROJECT_ROOT / p
         img = cv2.imread(str(full_p), cv2.IMREAD_GRAYSCALE)
         if img is None:
             raise FileNotFoundError(f"Missing synthetic image: {full_p}")
-        synth_feats.append(extract_devi_kavya_features_single(img, r18))
+        img_cropped = load_handwriting_crop(sfid, img)
+        synth_feats.append(extract_devi_kavya_features_single(img_cropped, r18))
         if (i + 1) % 500 == 0 or (i + 1) == len(synth_image_paths):
             print(f"    Synthetic forms: {i+1}/{len(synth_image_paths)}")
 
     clean_feats = np.array(clean_feats, dtype=np.float32)
     synth_feats = np.array(synth_feats, dtype=np.float32)
+    assert not np.isnan(clean_feats).any() and not np.isinf(clean_feats).any(), "NaN/Inf in clean Devi & Kavya features!"
+    assert not np.isnan(synth_feats).any() and not np.isinf(synth_feats).any(), "NaN/Inf in synth Devi & Kavya features!"
 
-    np.savez(DEVI_KAVYA_CACHE, clean_features=clean_feats, synth_features=synth_feats)
-    print(f"  [Cache] Saved Devi & Kavya features to: {DEVI_KAVYA_CACHE.name}")
+    np.savez(
+        DEVI_KAVYA_CACHE,
+        clean_features=clean_feats,
+        synth_features=synth_feats,
+        cropped=np.array(True),
+        interp=np.array("INTER_AREA"),
+        crop_mode=np.array("handwriting_bbox_p30"),
+    )
+    print(f"  [Cache] Saved cropped Devi & Kavya features to: {DEVI_KAVYA_CACHE.name}")
     return clean_feats, synth_feats
 
 
@@ -350,7 +394,9 @@ def run_benchmark():
     synth_meta_df = pd.read_csv(SYNTHETIC_CSV)
 
     clean_image_paths = meta_df["image_path"].tolist()
+    clean_form_ids = [str(x).strip() for x in meta_df["form_id"].tolist()]
     synth_image_paths = synth_meta_df["synthetic_image"].tolist()
+    synth_source_forms = [FORM_ID_MAP.get(str(x).strip(), str(x).strip()) for x in synth_meta_df["source_form"].tolist()]
     synth_types = np.array([str(x) for x in paired_df["anomaly_type"]])
     synth_sample_ids = paired_df["sample_id"].tolist()
     clean_sample_ids = meta_df["sample_id"].tolist()
@@ -380,50 +426,90 @@ def run_benchmark():
 
     # A. Existing Hybrid 256-D fused embeddings
     fused_data = np.load(FUSED_EMBEDDINGS_FILE, allow_pickle=True)
+    assert "cropped" in fused_data.files and bool(fused_data["cropped"]) is True, (
+        f"Refusing to run: {FUSED_EMBEDDINGS_FILE} is missing cropped=True!"
+    )
+    assert "interp" in fused_data.files and str(fused_data["interp"]) == "INTER_AREA", (
+        f"Refusing to run: {FUSED_EMBEDDINGS_FILE} is missing interp='INTER_AREA'!"
+    )
     clean_fused = fused_data["clean_embeddings"]
     synth_fused = fused_data["synthetic_embeddings"]
 
     clean_res_data = torch.load(CLEAN_FEATURE_FILE, map_location="cpu", weights_only=False)
+    assert bool(clean_res_data.get("cropped", False)) is True, (
+        f"Refusing to run: {CLEAN_FEATURE_FILE} is missing cropped=True!"
+    )
+    assert str(clean_res_data.get("interp", "")) == "INTER_AREA", (
+        f"Refusing to run: {CLEAN_FEATURE_FILE} is missing interp='INTER_AREA'!"
+    )
+    assert bool(fused_data["cropped"]) == bool(clean_res_data.get("cropped", False)), (
+        "Crop flag mismatch between paired_embeddings.npz and resnet_features.pt!"
+    )
 
     # B. Agarwal et al. 8-D features
-    clean_agarwal, synth_agarwal = get_or_extract_agarwal_features(clean_image_paths, synth_image_paths)
+    clean_agarwal, synth_agarwal = get_or_extract_agarwal_features(
+        clean_image_paths, synth_image_paths, clean_form_ids=clean_form_ids, synth_source_forms=synth_source_forms
+    )
 
     # C. Alevizos et al. features (6 geometric indicators: baseline, spacing, density, slant, width, height)
-    # Extract directly from validated clean and synthetic OpenCV features
-    clean_cv = clean_res_data["opencv_features"].numpy()
-    cv_lookup = {sid: clean_cv[i] for i, sid in enumerate(clean_sample_ids)}
-    form_to_sid = {str(r["form_id"]): str(r["sample_id"]) for _, r in meta_df.iterrows()}
-    synth_cv = np.array([cv_lookup[form_to_sid[FORM_ID_MAP.get(str(r["clean_form_id"]), str(r["clean_form_id"]))]] for _, r in paired_df.iterrows()])
+    # Extract directly from true pixel-extracted OpenCV features (NO parent lookup)
+    clean_cv = fused_data["clean_pixel_opencv"] if "clean_pixel_opencv" in fused_data.files else clean_res_data["opencv_features"].numpy()
+    synth_cv = fused_data["synthetic_pixel_opencv"]
     # Selected 6 features matching paper: [baseline_dev(1), spacing_cv(2), stroke_density(6), slant(7), word_width(5), word_height(4)]
     feature_cols = [1, 2, 6, 7, 5, 4]
     clean_alevizos = clean_cv[:, feature_cols]
     synth_alevizos = synth_cv[:, feature_cols]
 
     # D. Devi & Kavya features (640-D: 128-D DCT + 512-D ResNet18)
-    clean_dk, synth_dk = get_or_extract_devi_kavya_features(clean_image_paths, synth_image_paths)
+    clean_dk, synth_dk = get_or_extract_devi_kavya_features(
+        clean_image_paths, synth_image_paths, clean_form_ids=clean_form_ids, synth_source_forms=synth_source_forms
+    )
+
+    for arr_name, arr in [
+        ("clean_fused", clean_fused), ("synth_fused", synth_fused),
+        ("clean_agarwal", clean_agarwal), ("synth_agarwal", synth_agarwal),
+        ("clean_alevizos", clean_alevizos), ("synth_alevizos", synth_alevizos),
+        ("clean_dk", clean_dk), ("synth_dk", synth_dk),
+    ]:
+        assert not np.isnan(arr).any() and not np.isinf(arr).any(), f"NaN/Inf detected in {arr_name}!"
 
     # ------------------------------------------------------------
-    # 4. Model Training & Anomaly Scoring
+    # 4. Model Training & Anomaly Scoring (5-Fold Parent-Excluded Cross-Fitting)
     # ------------------------------------------------------------
-    print("\n[Step 4/6] Fitting anomaly scorers on reference library and evaluating...")
+    print("\n[Step 4/6] Fitting anomaly scorers via 5-fold parent-excluded cross-fitting...")
+    from sklearn.model_selection import KFold
+    fid_to_idx = {fid: i for i, fid in enumerate(clean_form_ids)}
+    synth_parent_idx = np.array([
+        fid_to_idx[FORM_ID_MAP.get(str(r["clean_form_id"]).strip(), str(r["clean_form_id"]).strip())]
+        for _, r in paired_df.iterrows()
+    ], dtype=int)
+    kf = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    folds = list(kf.split(np.arange(n_clean)))
+
     models_dict = {}
 
     # ------------------------------------------------------------
     # Method 1: Devi & Kavya (2023) [DCT + ResNet-18 -> Mahalanobis]
     # ------------------------------------------------------------
     print("  -> (1/5) Devi & Kavya (2023) [8x8 DCT + ResNet18 -> Mahalanobis]...")
-    dk_scaler = StandardScaler().fit(clean_dk)
-    dk_c_scaled = dk_scaler.transform(clean_dk)
-    dk_s_scaled = dk_scaler.transform(synth_dk)
+    m1_clean_test = np.zeros(n_clean, dtype=np.float64)
+    m1_synth_test = np.zeros(n_synth, dtype=np.float64)
+    for tr_i, te_i in folds:
+        te_set = set(int(x) for x in te_i)
+        s_mask = np.array([int(p) in te_set for p in synth_parent_idx], dtype=bool)
+        dk_scaler = StandardScaler().fit(clean_dk[tr_i])
+        dk_tr = dk_scaler.transform(clean_dk[tr_i])
+        dk_te_c = dk_scaler.transform(clean_dk[te_i])
+        dk_te_s = dk_scaler.transform(synth_dk[s_mask])
 
-    dk_centroid = dk_c_scaled.mean(axis=0)
-    dk_cov = np.cov(dk_c_scaled, rowvar=False) + 1e-4 * np.eye(dk_c_scaled.shape[1])
-    dk_cov_inv = np.linalg.pinv(dk_cov)
+        dk_centroid = dk_tr.mean(axis=0)
+        dk_cov = np.cov(dk_tr, rowvar=False) + 1e-4 * np.eye(dk_tr.shape[1])
+        dk_cov_inv = np.linalg.pinv(dk_cov)
 
-    diff_c = dk_c_scaled - dk_centroid
-    diff_s = dk_s_scaled - dk_centroid
-    m1_clean_test = np.sqrt(np.sum((diff_c @ dk_cov_inv) * diff_c, axis=1))
-    m1_synth_test = np.sqrt(np.sum((diff_s @ dk_cov_inv) * diff_s, axis=1))
+        diff_c = dk_te_c - dk_centroid
+        diff_s = dk_te_s - dk_centroid
+        m1_clean_test[te_i] = np.sqrt(np.sum((diff_c @ dk_cov_inv) * diff_c, axis=1))
+        m1_synth_test[s_mask] = np.sqrt(np.sum((diff_s @ dk_cov_inv) * diff_s, axis=1))
 
     models_dict["Devi & Kavya (2023) [DCT + ResNet-18]"] = {
         "status": "Kekre-DCT frequency features (128-D) + ResNet-18 (512-D) [640-D] -> Mahalanobis distance",
@@ -438,13 +524,18 @@ def run_benchmark():
     # Method 2: Agarwal et al. (2023) [Faithful Reimplementation: OneClassSVM]
     # ------------------------------------------------------------
     print("  -> (2/5) Agarwal et al. (2023) [Faithful: 8 Features -> OneClassSVM (nu=0.05)]...")
-    ag_scaler = StandardScaler().fit(clean_agarwal)
-    ag_c_scaled = ag_scaler.transform(clean_agarwal)
-    ag_s_scaled = ag_scaler.transform(synth_agarwal)
-
-    ocsvm = OneClassSVM(kernel="rbf", nu=0.05, gamma="scale").fit(ag_c_scaled)
-    m3_clean_test = -ocsvm.decision_function(ag_c_scaled)
-    m3_synth_test = -ocsvm.decision_function(ag_s_scaled)
+    m3_clean_test = np.zeros(n_clean, dtype=np.float64)
+    m3_synth_test = np.zeros(n_synth, dtype=np.float64)
+    for tr_i, te_i in folds:
+        te_set = set(int(x) for x in te_i)
+        s_mask = np.array([int(p) in te_set for p in synth_parent_idx], dtype=bool)
+        ag_scaler = StandardScaler().fit(clean_agarwal[tr_i])
+        ag_tr = ag_scaler.transform(clean_agarwal[tr_i])
+        ag_te_c = ag_scaler.transform(clean_agarwal[te_i])
+        ag_te_s = ag_scaler.transform(synth_agarwal[s_mask])
+        ocsvm = OneClassSVM(kernel="rbf", nu=0.05, gamma="scale").fit(ag_tr)
+        m3_clean_test[te_i] = -ocsvm.decision_function(ag_te_c)
+        m3_synth_test[s_mask] = -ocsvm.decision_function(ag_te_s)
 
     models_dict["Agarwal et al. (2023) [Faithful Reimplementation]"] = {
         "status": "Faithful reimplementation (Features 1-6 verified; Features 7-8 OCR unavailable)",
@@ -459,35 +550,41 @@ def run_benchmark():
     # Method 3: Alevizos et al. (2024) [Adapted: Conv-LSTM Autoencoder]
     # ------------------------------------------------------------
     print("  -> (3/5) Alevizos et al. (2024) [Adapted: Conv-LSTM Autoencoder L2 Error]...")
-    al_scaler = StandardScaler().fit(clean_alevizos)
-    al_c_scaled = al_scaler.transform(clean_alevizos)
-    al_s_scaled = al_scaler.transform(synth_alevizos)
+    m4_clean_test = np.zeros(n_clean, dtype=np.float64)
+    m4_synth_test = np.zeros(n_synth, dtype=np.float64)
+    for f_i, (tr_i, te_i) in enumerate(folds):
+        torch.manual_seed(RANDOM_STATE + f_i)
+        te_set = set(int(x) for x in te_i)
+        s_mask = np.array([int(p) in te_set for p in synth_parent_idx], dtype=bool)
+        al_scaler = StandardScaler().fit(clean_alevizos[tr_i])
+        al_tr = al_scaler.transform(clean_alevizos[tr_i])
+        al_te_c = al_scaler.transform(clean_alevizos[te_i])
+        al_te_s = al_scaler.transform(synth_alevizos[s_mask])
 
-    ae_model = ConvLSTMAutoencoder(input_dim=6, hidden_dim=32, latent_dim=16)
-    ae_opt = torch.optim.Adam(ae_model.parameters(), lr=1e-3, weight_decay=1e-4)
-    ae_crit = nn.MSELoss()
-    train_loader = DataLoader(
-        TensorDataset(torch.tensor(al_c_scaled, dtype=torch.float32)),
-        batch_size=32,
-        shuffle=True,
-    )
+        ae_model = ConvLSTMAutoencoder(input_dim=6, hidden_dim=32, latent_dim=16)
+        ae_opt = torch.optim.Adam(ae_model.parameters(), lr=1e-3, weight_decay=1e-4)
+        ae_crit = nn.MSELoss()
+        train_loader = DataLoader(
+            TensorDataset(torch.tensor(al_tr, dtype=torch.float32)),
+            batch_size=32,
+            shuffle=True,
+            generator=torch.Generator().manual_seed(RANDOM_STATE),
+        )
+        ae_model.train()
+        for _ in range(20):
+            for batch_x, in train_loader:
+                ae_opt.zero_grad()
+                recon_x = ae_model(batch_x)
+                loss = ae_crit(recon_x, batch_x)
+                loss.backward()
+                ae_opt.step()
 
-    ae_model.train()
-    for epoch in range(20):
-        for batch_x, in train_loader:
-            ae_opt.zero_grad()
-            recon_x = ae_model(batch_x)
-            loss = ae_crit(recon_x, batch_x)
-            loss.backward()
-            ae_opt.step()
-
-    ae_model.eval()
-    with torch.no_grad():
-        c_t = torch.tensor(al_c_scaled, dtype=torch.float32)
-        s_t = torch.tensor(al_s_scaled, dtype=torch.float32)
-
-        m4_clean_test = torch.sum((c_t - ae_model(c_t)) ** 2, dim=1).numpy()
-        m4_synth_test = torch.sum((s_t - ae_model(s_t)) ** 2, dim=1).numpy()
+        ae_model.eval()
+        with torch.no_grad():
+            c_t = torch.tensor(al_te_c, dtype=torch.float32)
+            s_t = torch.tensor(al_te_s, dtype=torch.float32)
+            m4_clean_test[te_i] = torch.sum((c_t - ae_model(c_t)) ** 2, dim=1).numpy()
+            m4_synth_test[s_mask] = torch.sum((s_t - ae_model(s_t)) ** 2, dim=1).numpy()
 
     models_dict["Alevizos et al. (2024) [Adapted Autoencoder]"] = {
         "status": "Architecture & features adapted from supervised 4-class model into unsupervised L2 scorer",
@@ -499,18 +596,22 @@ def run_benchmark():
     }
 
     # ------------------------------------------------------------
-    # Method 4: Proposed Method (Ablation - Local Density: k-NN k=5)
+    # Method 4: Proposed Method (Ablation - Local Density: k-NN k=5, Parent-Excluded)
     # ------------------------------------------------------------
-    print("  -> (4/5) Proposed Method (Ablation) [Pure Hybrid 256-D -> Leave-One-Out k-NN (k=5)]...")
-    knn_fused = NearestNeighbors(n_neighbors=6, metric="euclidean").fit(clean_fused)
-    m5_c_dist, _ = knn_fused.kneighbors(clean_fused)
-    m5_s_dist, _ = knn_fused.kneighbors(synth_fused)
-    # Exclude 0th neighbor (self) for clean to prevent data leakage
-    m5_clean_test = m5_c_dist[:, 1:6].mean(axis=1)
-    m5_synth_test = m5_s_dist[:, :5].mean(axis=1)
+    print("  -> (4/5) Proposed Method (Ablation) [Pure Hybrid 256-D -> Parent-Excluded k-NN (k=5)]...")
+    m5_clean_test = np.zeros(n_clean, dtype=np.float64)
+    m5_synth_test = np.zeros(n_synth, dtype=np.float64)
+    for tr_i, te_i in folds:
+        te_set = set(int(x) for x in te_i)
+        s_mask = np.array([int(p) in te_set for p in synth_parent_idx], dtype=bool)
+        knn_fused = NearestNeighbors(n_neighbors=5, metric="euclidean").fit(clean_fused[tr_i])
+        dc, _ = knn_fused.kneighbors(clean_fused[te_i])
+        ds, _ = knn_fused.kneighbors(synth_fused[s_mask])
+        m5_clean_test[te_i] = dc.mean(axis=1)
+        m5_synth_test[s_mask] = ds.mean(axis=1)
 
     models_dict["Proposed Method (Ablation: k-NN)"] = {
-        "status": "Proposed hybrid architecture with standard local density metric",
+        "status": "Proposed hybrid architecture with standard local density metric (parent-excluded)",
         "features": "Fused cross-attention visual-geometric embedding [256-D]",
         "test_scores": np.concatenate([m5_clean_test, m5_synth_test]),
         "clean_all_scores": m5_clean_test,
@@ -519,13 +620,17 @@ def run_benchmark():
     }
 
     # ------------------------------------------------------------
-    # Method 5: Proposed Method (Upgraded - Adaptive Local Density: LOF k=5, Leave-One-Out)
+    # Method 5: Proposed Method (Upgraded - Adaptive Local Density: LOF k=5, Parent-Excluded)
     # ------------------------------------------------------------
-    print("  -> (5/5) Proposed Method (Upgraded) [Pure Hybrid 256-D -> Leave-One-Out LOF (k=5)]...")
-    lof_nov = LocalOutlierFactor(n_neighbors=5, metric="minkowski", novelty=True).fit(clean_fused)
-    lof_trans = LocalOutlierFactor(n_neighbors=5, metric="minkowski", novelty=False).fit(clean_fused)
-    m6_clean_test = -lof_trans.negative_outlier_factor_ + lof_nov.offset_
-    m6_synth_test = -lof_nov.decision_function(synth_fused)
+    print("  -> (5/5) Proposed Method (Upgraded) [Pure Hybrid 256-D -> Parent-Excluded LOF (k=5)]...")
+    m6_clean_test = np.zeros(n_clean, dtype=np.float64)
+    m6_synth_test = np.zeros(n_synth, dtype=np.float64)
+    for tr_i, te_i in folds:
+        te_set = set(int(x) for x in te_i)
+        s_mask = np.array([int(p) in te_set for p in synth_parent_idx], dtype=bool)
+        lof_nov = LocalOutlierFactor(n_neighbors=5, metric="minkowski", novelty=True).fit(clean_fused[tr_i])
+        m6_clean_test[te_i] = -lof_nov.decision_function(clean_fused[te_i])
+        m6_synth_test[s_mask] = -lof_nov.decision_function(synth_fused[s_mask])
 
     models_dict["Proposed Method (Upgraded: Adaptive LOF)"] = {
         "status": "Proposed hybrid architecture with adaptive local outlier factor (LOO evaluation)",

@@ -6,6 +6,14 @@ import torch
 import torch.nn as nn
 from torchvision.models import resnet50, ResNet50_Weights
 
+from dataset import (
+    load_handwriting_crop,
+    resize_handwriting_crop,
+    crop_to_resnet_tensor,
+    extract_pixel_features,
+    FORM_ID_MAP,
+)
+
 
 # ============================================================
 # PATHS
@@ -14,6 +22,12 @@ from torchvision.models import resnet50, ResNet50_Weights
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 FEATURE_FILE = PROJECT_ROOT / "data" / "metadata" / "resnet_features.pt"
+SYNTHETIC_FEATURE_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "synthetic_form_anomalies"
+    / "synthetic_resnet_features.pt"
+)
 CHECKPOINT_FILE = PROJECT_ROOT / "best_dysgraphia_encoder.pth"
 SYNTHETIC_CSV = (
     PROJECT_ROOT
@@ -30,32 +44,6 @@ OUTPUT_FILE = (
 )
 
 DEVICE = torch.device("cpu")
-
-BBOX_FILE = PROJECT_ROOT / "data" / "metadata" / "form_handwriting_bboxes.csv"
-HANDWRITING_BBOXES = {}
-if BBOX_FILE.exists():
-    bbox_df = pd.read_csv(BBOX_FILE)
-    for _, r in bbox_df.iterrows():
-        HANDWRITING_BBOXES[str(r["form_id"]).strip()] = (
-            int(r["x1"]),
-            int(r["y1"]),
-            int(r["x2"]),
-            int(r["y2"]),
-        )
-    print(
-        f"Loaded {len(HANDWRITING_BBOXES)} bounding boxes for synthetic handwriting cropping."
-    )
-
-
-# ============================================================
-# FORM ID MAP
-# ============================================================
-
-FORM_ID_MAP = {
-    "a05-094(1)": "a05-094",
-    "b06-075(1)": "b06-075",
-    "g06-037b(1)": "g06-037b",
-}
 
 
 # ============================================================
@@ -151,66 +139,39 @@ class CachedFusionModel(nn.Module):
 
 
 # ============================================================
-# IMAGE LOADING
+# IMAGE LOADING (SHARED CROP + INTER_AREA RESIZE)
 # ============================================================
 
-def load_image(path, source_form=None, padding=30):
-
+def load_crop_and_tensor(path, source_form=None, padding=30):
     image = cv2.imread(
         str(path),
         cv2.IMREAD_GRAYSCALE
     )
-
     if image is None:
+        raise RuntimeError(f"Could not read image: {path}")
+    if source_form is None:
+        raise ValueError(f"source_form must be provided for {path}")
+    crop_gray = load_handwriting_crop(source_form, image, padding=padding)
+    tensor_224 = crop_to_resnet_tensor(crop_gray, size=224)
+    return crop_gray, tensor_224
 
-        raise RuntimeError(
-            f"Could not read image: {path}"
-        )
 
-    # Crop to pure handwriting if bounding box exists
-    if source_form and str(source_form).strip() in HANDWRITING_BBOXES:
-        x1, y1, x2, y2 = HANDWRITING_BBOXES[str(source_form).strip()]
-        img_h, img_w = image.shape[:2]
-        crop_x1 = max(0, x1 - padding)
-        crop_y1 = max(0, y1 - padding)
-        crop_x2 = min(img_w, x2 + padding)
-        crop_y2 = min(img_h, y2 + padding)
-        if crop_y2 > crop_y1 and crop_x2 > crop_x1:
-            image = image[crop_y1:crop_y2, crop_x1:crop_x2]
-
-    image = cv2.resize(
-        image,
-        (224, 224)
-    )
-
-    image = cv2.cvtColor(
-        image,
-        cv2.COLOR_GRAY2RGB
-    )
-
-    image = torch.from_numpy(
-        image
-    ).float() / 255.0
-
-    image = image.permute(
-        2,
-        0,
-        1
-    )
-
-    return image
+def load_image(path, source_form=None, padding=30):
+    _, tensor_224 = load_crop_and_tensor(path, source_form=source_form, padding=padding)
+    return tensor_224
 
 
 # ============================================================
 # RESNET FEATURE
 # ============================================================
 
-def get_resnet_feature(model, path, source_form=None):
-
-    image = load_image(
+def get_resnet_and_pixel_features(model, path, source_form=None):
+    crop_gray, tensor_224 = load_crop_and_tensor(
         path,
         source_form=source_form
-    ).unsqueeze(0)
+    )
+    pixel_cv_9d = extract_pixel_features(crop_gray)
+    image = tensor_224.unsqueeze(0)
 
     mean = torch.tensor(
         [0.485, 0.456, 0.406]
@@ -225,384 +186,177 @@ def get_resnet_feature(model, path, source_form=None):
     ) / std
 
     with torch.no_grad():
-
         feature = model(image)
 
-    return feature.squeeze(0)
+    return feature.squeeze(0), torch.from_numpy(pixel_cv_9d).float()
 
 
-# ============================================================
-# LOAD CACHED FEATURES
-# ============================================================
+if __name__ == "__main__":
+    print("Loading cached features...")
 
-print("Loading cached features...")
-
-cached = torch.load(
-    FEATURE_FILE,
-    map_location=DEVICE,
-    weights_only=False
-)
-
-clean_image_features = (
-    cached["image_features"]
-    .float()
-)
-
-clean_opencv_features = (
-    cached["opencv_features"]
-    .float()
-)
-
-sample_ids = [
-    str(x)
-    for x in cached["sample_ids"]
-]
-
-print(
-    "Clean samples:",
-    len(sample_ids)
-)
-
-
-# ============================================================
-# CREATE CLEAN FORM → INDEX MAP
-# ============================================================
-#
-# NEW:
-# This lets us record exactly which clean embedding
-# each synthetic sample came from.
-#
-# Example:
-#
-# source_form = "a05-094"
-# source_index = 123
-#
-# means synthetic sample was generated from
-# clean_embeddings[123].
-#
-# ============================================================
-
-clean_index_by_id = {
-    sample_ids[i]: i
-    for i in range(len(sample_ids))
-}
-
-
-# ============================================================
-# LOAD CHECKPOINT
-# ============================================================
-
-print("\nLoading checkpoint...")
-
-checkpoint = torch.load(
-    CHECKPOINT_FILE,
-    map_location=DEVICE,
-    weights_only=False
-)
-
-feature_mean = checkpoint[
-    "feature_mean"
-].float()
-
-feature_std = checkpoint[
-    "feature_std"
-].float()
-
-
-model = CachedFusionModel()
-
-model.load_state_dict(
-    checkpoint["model_state_dict"],
-    strict=False
-)
-
-model.eval()
-
-print("Fusion model loaded.")
-
-
-# ============================================================
-# CLEAN EMBEDDINGS
-# ============================================================
-
-print("\nCalculating clean embeddings...")
-
-normalized_opencv = (
-    clean_opencv_features
-    - feature_mean
-) / (
-    feature_std + 1e-8
-)
-
-with torch.no_grad():
-
-    clean_embeddings = model(
-        clean_image_features,
-        normalized_opencv
+    cached = torch.load(
+        FEATURE_FILE,
+        map_location=DEVICE,
+        weights_only=False
     )
 
-clean_embeddings = (
-    clean_embeddings
-    .cpu()
-    .numpy()
-)
-
-print(
-    "Clean embeddings:",
-    clean_embeddings.shape
-)
-
-
-# ============================================================
-# MAP CLEAN FEATURES
-# ============================================================
-
-opencv_by_id = {
-    sample_ids[i]: clean_opencv_features[i]
-    for i in range(len(sample_ids))
-}
-
-
-# ============================================================
-# LOAD RESNET
-# ============================================================
-
-print("\nLoading ResNet50...")
-
-resnet = resnet50(
-    weights=ResNet50_Weights.DEFAULT
-)
-
-resnet.fc = nn.Identity()
-
-resnet.eval()
-
-print("ResNet50 loaded.")
-
-
-# ============================================================
-# LOAD SYNTHETIC DATA
-# ============================================================
-
-synthetic = pd.read_csv(
-    SYNTHETIC_CSV
-)
-
-print(
-    "\nSynthetic samples:",
-    len(synthetic)
-)
-
-
-synthetic_embeddings = []
-
-synthetic_types = []
-
-source_forms = []
-
-# ============================================================
-# NEW:
-# Exact index of the clean embedding corresponding
-# to each synthetic sample.
-# ============================================================
-
-source_indices = []
-
-
-# ============================================================
-# PROCESS SYNTHETIC IMAGES
-# ============================================================
-
-for index, row in synthetic.iterrows():
-
-    source_form = str(
-        row["source_form"]
+    assert bool(cached.get("cropped", False)) is True, (
+        f"Refusing to run: {FEATURE_FILE} does not have cropped=True!"
+    )
+    assert str(cached.get("interp", "")) == "INTER_AREA", (
+        f"Refusing to run: {FEATURE_FILE} does not have interp='INTER_AREA'!"
     )
 
-    source_form = FORM_ID_MAP.get(
-        source_form,
-        source_form
+    clean_image_features = cached["image_features"].float()
+    # Use pixel-extracted 9-D vectors for clean forms
+    clean_opencv_features = cached["pixel_opencv_features"].float()
+
+    sample_ids = [str(x) for x in cached["sample_ids"]]
+    print("Clean samples:", len(sample_ids))
+
+    clean_index_by_id = {
+        sample_ids[i]: i
+        for i in range(len(sample_ids))
+    }
+
+    print("\nLoading retrained pixel checkpoint...")
+    checkpoint = torch.load(
+        CHECKPOINT_FILE,
+        map_location=DEVICE,
+        weights_only=False
     )
 
-    if source_form not in opencv_by_id:
+    feature_mean = checkpoint["feature_mean"].float()
+    feature_std = checkpoint["feature_std"].float()
 
-        print(
-            "Skipping unmatched form:",
-            source_form
-        )
-
-        continue
-
-    # --------------------------------------------------------
-    # NEW:
-    # Find exact clean embedding index
-    # --------------------------------------------------------
-
-    source_index = clean_index_by_id[source_form]
-
-    image_path = (
-        PROJECT_ROOT
-        / row["synthetic_image"]
+    model = CachedFusionModel()
+    model.load_state_dict(
+        checkpoint["model_state_dict"],
+        strict=False
     )
+    model.eval()
+    print("Fusion model loaded.")
 
-    if not image_path.exists():
+    print("\nCalculating clean embeddings...")
+    normalized_opencv = (
+        clean_opencv_features - feature_mean
+    ) / (feature_std + 1e-8)
 
-        image_path = (
-            PROJECT_ROOT
-            / "data"
-            / "synthetic_form_anomalies"
-            / "images"
-            / Path(
-                row["synthetic_image"]
-            ).name
-        )
-
-    # ResNet feature (cropped to pure handwriting)
-    image_feature = get_resnet_feature(
-        resnet,
-        image_path,
-        source_form=source_form
-    )
-
-    image_feature = (
-        image_feature
-        .unsqueeze(0)
-    )
-
-    # Original clean OpenCV features
-    opencv_feature = (
-        opencv_by_id[source_form]
-        .unsqueeze(0)
-    )
-
-    opencv_feature = (
-        opencv_feature
-        - feature_mean
-    ) / (
-        feature_std + 1e-8
-    )
-
-    # Fusion embedding
     with torch.no_grad():
-
-        embedding = model(
-            image_feature,
-            opencv_feature
+        clean_embeddings = model(
+            clean_image_features,
+            normalized_opencv
         )
 
-    embedding = (
-        embedding
-        .squeeze(0)
-        .cpu()
-        .numpy()
-    )
+    clean_embeddings = clean_embeddings.cpu().numpy()
+    print("Clean embeddings:", clean_embeddings.shape)
 
-    synthetic_embeddings.append(
-        embedding
-    )
+    print("\nLoading ResNet50...")
+    resnet = resnet50(weights=ResNet50_Weights.DEFAULT)
+    resnet.fc = nn.Identity()
+    resnet.eval()
+    print("ResNet50 loaded.")
 
-    synthetic_types.append(
-        row["anomaly_type"]
-    )
+    synthetic = pd.read_csv(SYNTHETIC_CSV)
+    print("\nSynthetic samples:", len(synthetic))
 
-    source_forms.append(
-        source_form
-    )
+    synthetic_embeddings = []
+    synthetic_resnet_features = []
+    synthetic_pixel_opencv_features = []
+    synthetic_sample_ids = []
+    synthetic_types = []
+    source_forms = []
+    source_indices = []
 
-    # --------------------------------------------------------
-    # NEW:
-    # Save the exact clean embedding index.
-    # --------------------------------------------------------
+    for index, row in synthetic.iterrows():
+        source_form = str(row["source_form"])
+        source_form = FORM_ID_MAP.get(source_form, source_form)
 
-    source_indices.append(
-        source_index
-    )
+        if source_form not in clean_index_by_id:
+            print("Skipping unmatched form:", source_form)
+            continue
 
-    if (index + 1) % 100 == 0:
+        source_index = clean_index_by_id[source_form]
+        image_path = PROJECT_ROOT / row["synthetic_image"]
+        if not image_path.exists():
+            image_path = (
+                PROJECT_ROOT
+                / "data"
+                / "synthetic_form_anomalies"
+                / "images"
+                / Path(row["synthetic_image"]).name
+            )
 
-        print(
-            f"Processed {index + 1}/{len(synthetic)}"
+        # Extract BOTH 2048-D ResNet (INTER_AREA) AND 9-D pixel-derived OpenCV features from the corrupted crop itself!
+        raw_feat, synth_cv_vec = get_resnet_and_pixel_features(
+            resnet,
+            image_path,
+            source_form=source_form
         )
+        synthetic_resnet_features.append(raw_feat.cpu())
+        synthetic_pixel_opencv_features.append(synth_cv_vec.cpu())
+        synthetic_sample_ids.append(str(row["sample_id"]))
 
+        image_feature = raw_feat.unsqueeze(0)
+        opencv_feature = (synth_cv_vec.unsqueeze(0) - feature_mean) / (feature_std + 1e-8)
 
-# ============================================================
-# CONVERT TO NUMPY
-# ============================================================
+        with torch.no_grad():
+            embedding = model(image_feature, opencv_feature)
 
-synthetic_embeddings = np.array(
-    synthetic_embeddings
-)
+        embedding = embedding.squeeze(0).cpu().numpy()
+        synthetic_embeddings.append(embedding)
+        synthetic_types.append(row["anomaly_type"])
+        source_forms.append(source_form)
+        source_indices.append(source_index)
 
-synthetic_types = np.array(
-    synthetic_types
-)
+        if (index + 1) % 100 == 0:
+            print(f"Processed {index + 1}/{len(synthetic)}")
 
-source_forms = np.array(
-    source_forms
-)
+    synthetic_resnet_tensor = torch.stack(synthetic_resnet_features, dim=0)
+    synthetic_pixel_cv_tensor = torch.stack(synthetic_pixel_opencv_features, dim=0)
+    assert not torch.isnan(synthetic_resnet_tensor).any() and not torch.isinf(synthetic_resnet_tensor).any(), "NaN/Inf in synthetic_resnet_tensor!"
+    assert not torch.isnan(synthetic_pixel_cv_tensor).any() and not torch.isinf(synthetic_pixel_cv_tensor).any(), "NaN/Inf in synthetic_pixel_cv_tensor!"
 
-source_indices = np.array(
-    source_indices,
-    dtype=np.int64
-)
+    torch.save(
+        {
+            "image_features": synthetic_resnet_tensor,
+            "pixel_opencv_features": synthetic_pixel_cv_tensor,
+            "opencv_features": synthetic_pixel_cv_tensor,
+            "sample_ids": synthetic_sample_ids,
+            "anomaly_types": list(synthetic_types),
+            "source_forms": list(source_forms),
+            "cropped": True,
+            "crop_mode": "handwriting_bbox_p30",
+            "interp": "INTER_AREA",
+            "opencv_source": "pixel_extracted",
+        },
+        SYNTHETIC_FEATURE_FILE,
+    )
+    print(f"Saved cropped + INTER_AREA + pixel-OpenCV synthetic features to: {SYNTHETIC_FEATURE_FILE}")
 
+    synthetic_embeddings = np.array(synthetic_embeddings)
+    assert not np.isnan(clean_embeddings).any() and not np.isinf(clean_embeddings).any(), "NaN/Inf in clean_embeddings!"
+    assert not np.isnan(synthetic_embeddings).any() and not np.isinf(synthetic_embeddings).any(), "NaN/Inf in synthetic_embeddings!"
 
-# ============================================================
-# SAVE
-# ============================================================
+    synthetic_types = np.array(synthetic_types)
+    source_forms = np.array(source_forms)
+    source_indices = np.array(source_indices, dtype=np.int64)
 
-np.savez(
-    OUTPUT_FILE,
+    np.savez(
+        OUTPUT_FILE,
+        clean_embeddings=clean_embeddings,
+        synthetic_embeddings=synthetic_embeddings,
+        clean_pixel_opencv=clean_opencv_features.numpy(),
+        synthetic_pixel_opencv=synthetic_pixel_cv_tensor.numpy(),
+        synthetic_types=synthetic_types,
+        source_forms=source_forms,
+        source_indices=source_indices,
+        cropped=np.array(True),
+        crop_mode=np.array("handwriting_bbox_p30"),
+        interp=np.array("INTER_AREA"),
+        opencv_source=np.array("pixel_extracted"),
+    )
 
-    clean_embeddings=clean_embeddings,
-
-    synthetic_embeddings=synthetic_embeddings,
-
-    synthetic_types=synthetic_types,
-
-    source_forms=source_forms,
-
-    # NEW
-    source_indices=source_indices
-)
-
-
-# ============================================================
-# FINAL CHECK
-# ============================================================
-
-print("\n")
-print("=" * 60)
-print("EMBEDDINGS SAVED")
-print("=" * 60)
-
-print(
-    "Clean:",
-    clean_embeddings.shape
-)
-
-print(
-    "Synthetic:",
-    synthetic_embeddings.shape
-)
-
-print(
-    "Anomaly types:",
-    len(synthetic_types)
-)
-
-print(
-    "Source indices:",
-    source_indices.shape
-)
-
-print(
-    "Unique source forms:",
-    len(np.unique(source_forms))
-)
-
-print("\nSaved to:")
-
-print(
-    OUTPUT_FILE
-)
+    print("\nSaved paired embeddings to:")
+    print(OUTPUT_FILE)
+    print("\nDone.")

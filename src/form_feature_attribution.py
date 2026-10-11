@@ -1062,41 +1062,42 @@ def print_results(
 # MAIN
 # ============================================================
 
+def normalize_sample_id(raw_id: str) -> str:
+    s = str(raw_id).strip()
+    if s.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
+        s = Path(s).stem
+    elif "/" in s or "\\" in s:
+        s = Path(s).stem
+    return s.strip()
+
+
 def main():
 
     # --------------------------------------------------------
     # SAMPLE ID
     # --------------------------------------------------------
+    import argparse
 
-    if len(sys.argv) < 2:
+    parser = argparse.ArgumentParser(
+        description="Calculate counterfactual LOF feature sensitivity for a handwriting sample."
+    )
+    parser.add_argument(
+        "pos_sample_id",
+        nargs="?",
+        default=None,
+        help="Sample ID or image filename, e.g. a01-000u or a01-000u.png",
+    )
+    parser.add_argument(
+        "--sample",
+        "--sample_id",
+        dest="sample_id",
+        default=None,
+        help="Sample ID or image filename, e.g. a01-000u or a01-000u.png (defaults to a01-000u)",
+    )
+    args = parser.parse_args()
 
-        print(
-            "\nUsage:"
-        )
-
-        print(
-            "python form_feature_attribution.py SAMPLE_ID"
-        )
-
-        print(
-            "\nExamples:"
-        )
-
-        print(
-            "python form_feature_attribution.py l01-179"
-        )
-
-        print(
-            "python form_feature_attribution.py j06-051"
-        )
-
-        print(
-            "python form_feature_attribution.py n01-052"
-        )
-
-        sys.exit(1)
-
-    sample_id = sys.argv[1]
+    raw_sample = args.sample_id or args.pos_sample_id or "a01-000u"
+    sample_id = normalize_sample_id(raw_sample)
 
     print("\n")
 
