@@ -1,9 +1,9 @@
 ablation_id,configuration,feature_space,scoring_algorithm,overall_roc_auc,overall_pr_auc,ci_95_low,ci_95_high,blur_auc,dropout_auc,thickening_auc,thinning_auc,runtime_seconds
-ABL-A,Clinical/OpenCV Only (9-D),9-D Handcrafted Geometric Features,Adaptive LOF (k=5),0.5998,0.4853,0.5781,0.6217,0.6334,0.5984,0.5761,0.5959,0.222
-ABL-B,ResNet-50 Visual Only (2048-D),2048-D Deep Visual Features,Adaptive LOF (k=5),0.592,0.4662,0.5691,0.6141,0.6391,0.5928,0.584,0.5608,1.531
-ABL-C,"Raw Concatenation (2057-D, No Attention)",Raw Concat [ResNet 2048 + OpenCV 9],Adaptive LOF (k=5),0.592,0.4664,0.5695,0.6142,0.6411,0.5911,0.5837,0.5613,1.484
-ABL-D,"ResNet + Encoded OpenCV (2112-D, No Bottleneck)",2112-D Early Fusion [ResNet 2048 + Encoded CV 64],Adaptive LOF (k=5),0.5933,0.4696,0.5699,0.6157,0.6451,0.5934,0.5847,0.5595,1.534
-ABL-E,Full 256-D Embedding + Adaptive LOF,256-D Attention Bottleneck + Recon Pretext,Adaptive LOF (k=5),0.6552,0.5669,0.6336,0.6772,0.7321,0.5743,0.6728,0.6508,0.344
-ABL-F,Full 256-D Embedding + k-NN,256-D Attention Bottleneck + Recon Pretext,Euclidean k-NN (k=5),0.6241,0.4851,0.6031,0.6455,0.6788,0.5462,0.6285,0.6468,0.178
-ABL-G,Full 256-D Embedding + One-Class SVM,256-D Attention Bottleneck + Recon Pretext,"One-Class SVM (RBF, nu=0.05)",0.611,0.4937,0.5898,0.633,0.6768,0.5445,0.622,0.6086,0.142
-ABL-H,Full 256-D Embedding + Isolation Forest,256-D Attention Bottleneck + Recon Pretext,Isolation Forest (T=200),0.5867,0.4449,0.5649,0.6084,0.6389,0.5108,0.5792,0.6207,1.369
+ABL-A,Clinical/OpenCV Only (9-D),9-D Handcrafted Geometric Features,Adaptive LOF (k=5),0.5989,0.4896,0.5765,0.6211,0.6888,0.555,0.5669,0.5959,0.282
+ABL-B,ResNet-50 Visual Only (2048-D),2048-D Deep Visual Features,Adaptive LOF (k=5),0.592,0.4662,0.5691,0.6141,0.6391,0.5928,0.584,0.5608,1.242
+ABL-C,"Raw Concatenation (2057-D, No Attention)",Raw Concat [ResNet 2048 + OpenCV 9],Adaptive LOF (k=5),0.592,0.4663,0.5694,0.6141,0.6407,0.591,0.5841,0.5613,1.125
+ABL-D,"ResNet + Encoded OpenCV (2112-D, No Bottleneck)",2112-D Early Fusion [ResNet 2048 + Encoded CV 64],Adaptive LOF (k=5),0.5935,0.4697,0.5702,0.6159,0.6441,0.5952,0.5847,0.5595,1.334
+ABL-E,Full 256-D Embedding + Adaptive LOF,256-D Attention Bottleneck + Recon Pretext,Adaptive LOF (k=5),0.6551,0.5581,0.6329,0.6762,0.7103,0.593,0.6732,0.6508,0.22
+ABL-F,Full 256-D Embedding + k-NN,256-D Attention Bottleneck + Recon Pretext,Euclidean k-NN (k=5),0.6243,0.4828,0.6032,0.6448,0.6474,0.5714,0.6316,0.6468,0.114
+ABL-G,Full 256-D Embedding + One-Class SVM,256-D Attention Bottleneck + Recon Pretext,"One-Class SVM (RBF, nu=0.05)",0.6143,0.4921,0.5931,0.6358,0.6279,0.5933,0.6292,0.6086,0.12
+ABL-H,Full 256-D Embedding + Isolation Forest,256-D Attention Bottleneck + Recon Pretext,Isolation Forest (T=200),0.5888,0.4444,0.5663,0.6097,0.6106,0.5404,0.5829,0.6207,1.452

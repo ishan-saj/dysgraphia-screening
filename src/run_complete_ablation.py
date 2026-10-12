@@ -436,8 +436,11 @@ ax.legend(loc="lower right", frameon=True, framealpha=0.95, facecolor="#FFFFFF",
 
 plt.tight_layout()
 plt.savefig(OUTPUT_DIR / "ablation_barplot.png", dpi=300)
+figures_dir = PROJECT_ROOT / "results" / "figures"
+figures_dir.mkdir(parents=True, exist_ok=True)
+plt.savefig(figures_dir / "ablation_barplot.png", dpi=300)
 plt.close()
-print("Saved results/ablation/ablation_barplot.png")
+print("Saved results/ablation/ablation_barplot.png and results/figures/ablation_barplot.png")
 
 # Write README.md
 readme_content = f"""# Phase 3: Systematic Component Ablation Study
