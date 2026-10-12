@@ -63,6 +63,8 @@ SYNTHETIC_IMAGE_DIR = PROJECT_ROOT / "data" / "synthetic_form_anomalies" / "imag
 # Output artifacts
 ROC_PLOT_FILE = PROJECT_ROOT / "data" / "synthetic_form_anomalies" / "literature_benchmark_roc.png"
 PR_PLOT_FILE = PROJECT_ROOT / "data" / "synthetic_form_anomalies" / "literature_benchmark_pr.png"
+ANOMALY_TYPE_PLOT_FILE = PROJECT_ROOT / "data" / "synthetic_form_anomalies" / "anomaly_type_roc_auc.png"
+RESULTS_FIGURES_DIR = PROJECT_ROOT / "results" / "figures"
 OUTPUT_METRICS_CSV = PROJECT_ROOT / "data" / "synthetic_form_anomalies" / "literature_benchmark_metrics.csv"
 OUTPUT_SCORES_CSV = PROJECT_ROOT / "data" / "synthetic_form_anomalies" / "literature_benchmark_raw_scores.csv"
 
@@ -719,6 +721,76 @@ def run_benchmark():
     plt.savefig(PR_PLOT_FILE, dpi=300)
     plt.close()
     print(f"  [OK] Saved PR curve plot to:  {PR_PLOT_FILE.name}")
+
+    # Anomaly-Type Analysis: ROC-AUC by Perturbation (Slide 18 Grouped Bar Chart)
+    fig, ax = plt.subplots(figsize=(11, 5.8), dpi=300)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    perturbation_cols = ["Blur AUC", "Dropout AUC", "Thickening AUC", "Thinning AUC"]
+    perturbation_labels = ["Blur", "Dropout", "Thickening", "Thinning"]
+    short_names = [
+        "Devi & Kavya",
+        "Agarwal et al.",
+        "Alevizos et al.",
+        "Proposed k-NN",
+        "Proposed Adaptive LOF",
+    ]
+    bar_colors = ["#3B68B5", "#ED7D31", "#9E9E9E", "#68A840", "#C0281B"]
+
+    x = np.arange(len(perturbation_labels))
+    n_models = len(short_names)
+    width = 0.145
+    offsets = np.linspace(-(n_models - 1) / 2, (n_models - 1) / 2, n_models) * width
+
+    for idx, (row_idx, s_name, b_color, offset) in enumerate(zip(range(len(metrics_df)), short_names, bar_colors, offsets)):
+        row = metrics_df.iloc[row_idx]
+        vals = [float(row[c]) for c in perturbation_cols]
+        bars = ax.bar(
+            x + offset,
+            vals,
+            width=width * 0.96,
+            color=b_color,
+            edgecolor="none",
+            label=s_name,
+        )
+        is_proposed_lof = (idx == n_models - 1)
+        for bar, val in zip(bars, vals):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                bar.get_height() + (0.010 if is_proposed_lof else 0.006),
+                f"{val:.4f}",
+                ha="center",
+                va="bottom",
+                fontsize=7.6 if is_proposed_lof else 7.2,
+                fontweight="bold" if is_proposed_lof else "normal",
+                color="#1A1A1A",
+            )
+
+    ax.set_title("ROC-AUC by Perturbation", loc="left", fontsize=15, fontweight="bold", color="#1A1A1A", pad=10)
+    ax.set_ylabel("ROC-AUC", fontsize=11.5, color="#222222")
+    ax.set_xticks(x)
+    ax.set_xticklabels(perturbation_labels, fontsize=11.5, color="#222222")
+    ax.set_xlim(-0.55, 3.95)
+    ax.set_ylim(0.0, 0.85)
+    ax.set_yticks(np.arange(0.0, 0.85, 0.1))
+    ax.tick_params(axis="both", colors="#333333", labelsize=9.5)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#BFBFBF")
+    ax.spines["bottom"].set_color("#BFBFBF")
+    ax.legend(loc="upper right", frameon=False, fontsize=9.2)
+
+    plt.tight_layout()
+    plt.savefig(ANOMALY_TYPE_PLOT_FILE, dpi=300, facecolor="white")
+    plt.close()
+    print(f"  [OK] Saved Anomaly-Type ROC-AUC plot to: {ANOMALY_TYPE_PLOT_FILE.name}")
+
+    if RESULTS_FIGURES_DIR.exists():
+        import shutil
+        shutil.copy2(ROC_PLOT_FILE, RESULTS_FIGURES_DIR / ROC_PLOT_FILE.name)
+        shutil.copy2(PR_PLOT_FILE, RESULTS_FIGURES_DIR / PR_PLOT_FILE.name)
+        shutil.copy2(ANOMALY_TYPE_PLOT_FILE, RESULTS_FIGURES_DIR / ANOMALY_TYPE_PLOT_FILE.name)
 
     # ------------------------------------------------------------
     # Save CSVs
