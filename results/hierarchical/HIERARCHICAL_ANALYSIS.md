@@ -23,18 +23,18 @@ To address this, we implemented a **hierarchical multi-scale anomaly screening f
 ### Master Evaluation Table (Held-Out Test Set)
 | Architecture / Scale | Formulation / Weights | Overall ROC-AUC | 95% Bootstrap CI | Overall PR-AUC | Thickening AUC | Dropout AUC | Blur AUC | Thinning AUC |
 |:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| Page-Level Alone | Single Scale | 0.6208 | [0.5327, 0.7055] | 0.6435 | 0.6742 | 0.6376 | 0.6128 | 0.5442 |
-| Line-Level Alone | Single Scale | 0.3307 | [0.2489, 0.4059] | 0.4657 | 0.2664 | 0.3231 | 0.3895 | 0.3584 |
-| Word-Level Alone | Single Scale | 0.3841 | [0.2975, 0.4699] | 0.4893 | 0.3386 | 0.3335 | 0.4621 | 0.4112 |
-| **Hierarchical Fusion (0.90P+0.10L+-0.00W)** | **Learned Simplex** | **0.5754** | [0.4861, 0.6641] | **0.6108** | 0.6168 | 0.6007 | 0.5640 | 0.5092 |
+| Page-Level Alone | Single Scale | 0.7713 | [0.7011, 0.8360] | 0.8027 | 0.7799 | 0.6714 | 0.8161 | 0.8136 |
+| Line-Level Alone | Single Scale | 0.6186 | [0.5395, 0.7047] | 0.7003 | 0.6868 | 0.6253 | 0.5585 | 0.5878 |
+| Word-Level Alone | Single Scale | 0.6642 | [0.5812, 0.7460] | 0.6898 | 0.7121 | 0.7027 | 0.5922 | 0.6397 |
+| **Hierarchical Fusion (0.65P+0.10L+0.25W)** | **Learned Simplex** | **0.7935** | [0.7225, 0.8557] | **0.8264** | 0.8050 | 0.7389 | 0.8064 | 0.8200 |
 
 ---
 
 ## 4. Key Scientific Insights
 
 ### 4.1 Optimal Scale Allocation
-- The validation grid search converged to optimal weights: **$w_{\text{page}} = 0.90$**, **$w_{\text{line}} = 0.10$**, **$w_{\text{word}} = -0.00$**.
-- Combining all three scales achieved an overall test ROC-AUC of **0.5754** and PR-AUC of **0.6108**.
+- The validation grid search converged to optimal weights: **$w_{\text{page}} = 0.65$**, **$w_{\text{line}} = 0.10$**, **$w_{\text{word}} = 0.25$**.
+- Combining all three scales achieved an overall test ROC-AUC of **0.7935** and PR-AUC of **0.8264**.
 
 ### 4.2 Resolving Spatial Downsampling Dilution
 - Micro-level word features provide sharp localized sensitivity to stroke-level corruptions (especially Dropout and Thinning) where page-level CNNs suffer downsampling attenuation.
