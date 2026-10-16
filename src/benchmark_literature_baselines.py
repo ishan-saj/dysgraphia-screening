@@ -9,8 +9,8 @@ Reference library: 1,539 clean IAM handwriting forms (normal baseline, y=0).
 Anomaly test set:  1,000 synthetic corrupted forms across 4 corruption slices (y=1).
 
 Paradigms evaluated:
-1. Devi & Kavya (2023) [Approximate]:
-   Block-wise 2D DCT (8x8) + frozen ResNet18 -> Mahalanobis distance to normal centroid.
+1. Devi & Kavya (2023) [Adapted Paradigm Baseline]:
+   8x8 block-wise Kekre-DCT hybrid wavelet + frozen ResNet18 -> One-Class k-NN distance (k=5).
 2. Agarwal et al. (2023) [Faithful Reimplementation]:
    8 paper features (image processing + OCR status) -> OneClassSVM (RBF, nu=0.05).
 3. Alevizos et al. (2024) [Adapted Reimplementation]:
@@ -285,12 +285,37 @@ def get_or_extract_agarwal_features(clean_image_paths, synth_image_paths, clean_
     return clean_feats, synth_feats
 
 
+def generate_kekre_matrix(N: int = 8) -> np.ndarray:
+    """
+    Generate the N x N Kekre transform matrix as defined by Dr. H. B. Kekre:
+    Row 0: All 1s.
+    Row i (i >= 1): Diagonal is -N + i, entries to the right are 1, entries to the left are 0.
+    """
+    K = np.zeros((N, N), dtype=np.float32)
+    for i in range(N):
+        for j in range(N):
+            if i == 0:
+                K[i, j] = 1.0
+            elif i == j:
+                K[i, j] = float(-N + (i + 1))
+            elif j > i:
+                K[i, j] = 1.0
+            else:
+                K[i, j] = 0.0
+    return K
+
+
+# Pre-compute fixed 8x8 Kekre transform matrix
+KEKRE_8x8 = generate_kekre_matrix(8)
+
+
 def extract_devi_kavya_features_single(img: np.ndarray, r18_model: nn.Module) -> np.ndarray:
     """
-    Approximate implementation of Devi & Kavya (2023):
-    1. Block-wise 2D DCT (8x8 blocks, standard JPEG-style stand-in for Kekre-DCT).
-    2. Pool mean and std of DCT coefficients across blocks (128-D).
-    3. ResNet18 penultimate layer features (512-D).
+    Implementation of Devi & Kavya (2023) feature extraction:
+    1. Block-wise 2D Kekre-DCT hybrid transform on 8x8 blocks:
+       Kekre transform followed by 2D Discrete Cosine Transform (ortho normalized).
+    2. Pool mean and std of Kekre-DCT coefficients across blocks (128-D).
+    3. ResNet18 penultimate layer transfer features (512-D).
     Concatenation = 640-D vector.
     Uses shared resize_handwriting_crop (cv2.INTER_AREA).
     """
@@ -298,13 +323,18 @@ def extract_devi_kavya_features_single(img: np.ndarray, r18_model: nn.Module) ->
     img_224 = resized_u8.astype(np.float32) / 255.0
     h, w = img_224.shape
 
-    # Vectorized 8x8 block 2D DCT
+    # Vectorized 8x8 block decomposition
     blocks = img_224.reshape(h // 8, 8, w // 8, 8).swapaxes(1, 2).reshape(-1, 8, 8)
-    d2 = dct(dct(blocks, axis=2, norm="ortho"), axis=1, norm="ortho")
-    d2_flat = d2.reshape(blocks.shape[0], 64)
-    dct_feat = np.concatenate([d2_flat.mean(axis=0), d2_flat.std(axis=0)])  # 128-D
 
-    # ResNet18 penultimate layer
+    # 1. Kekre Transform: K @ block @ K.T
+    kekre_blocks = KEKRE_8x8 @ blocks @ KEKRE_8x8.T
+
+    # 2. 2D DCT on Kekre-transformed blocks
+    kdct = dct(dct(kekre_blocks, axis=2, norm="ortho"), axis=1, norm="ortho")
+    kdct_flat = kdct.reshape(blocks.shape[0], 64)
+    dct_feat = np.concatenate([kdct_flat.mean(axis=0), kdct_flat.std(axis=0)])  # 128-D
+
+    # 3. ResNet18 penultimate layer features
     rgb_224 = cv2.cvtColor(resized_u8, cv2.COLOR_GRAY2RGB)
     t = torch.from_numpy(rgb_224).permute(2, 0, 1).unsqueeze(0).float() / 255.0
     mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
@@ -491,9 +521,9 @@ def run_benchmark():
     models_dict = {}
 
     # ------------------------------------------------------------
-    # Method 1: Devi & Kavya (2023) [DCT + ResNet-18 -> Mahalanobis]
+    # Method 1: Devi & Kavya (2023) [Kekre-DCT + ResNet-18 -> k-NN Distance Scorer]
     # ------------------------------------------------------------
-    print("  -> (1/5) Devi & Kavya (2023) [8x8 DCT + ResNet18 -> Mahalanobis]...")
+    print("  -> (1/5) Devi & Kavya (2023) [Kekre-DCT (128-D) + ResNet18 (512-D) -> k-NN Distance (k=5)]...")
     m1_clean_test = np.zeros(n_clean, dtype=np.float64)
     m1_synth_test = np.zeros(n_synth, dtype=np.float64)
     for tr_i, te_i in folds:
@@ -504,18 +534,16 @@ def run_benchmark():
         dk_te_c = dk_scaler.transform(clean_dk[te_i])
         dk_te_s = dk_scaler.transform(synth_dk[s_mask])
 
-        dk_centroid = dk_tr.mean(axis=0)
-        dk_cov = np.cov(dk_tr, rowvar=False) + 1e-4 * np.eye(dk_tr.shape[1])
-        dk_cov_inv = np.linalg.pinv(dk_cov)
+        # One-class k-NN distance scorer matching paper's k-NN algorithm family
+        knn_dk = NearestNeighbors(n_neighbors=5, metric="euclidean").fit(dk_tr)
+        dc, _ = knn_dk.kneighbors(dk_te_c)
+        ds, _ = knn_dk.kneighbors(dk_te_s)
+        m1_clean_test[te_i] = dc.mean(axis=1)
+        m1_synth_test[s_mask] = ds.mean(axis=1)
 
-        diff_c = dk_te_c - dk_centroid
-        diff_s = dk_te_s - dk_centroid
-        m1_clean_test[te_i] = np.sqrt(np.sum((diff_c @ dk_cov_inv) * diff_c, axis=1))
-        m1_synth_test[s_mask] = np.sqrt(np.sum((diff_s @ dk_cov_inv) * diff_s, axis=1))
-
-    models_dict["Devi & Kavya (2023) [DCT + ResNet-18]"] = {
-        "status": "Kekre-DCT frequency features (128-D) + ResNet-18 (512-D) [640-D] -> Mahalanobis distance",
-        "features": "8x8 DCT (128-D) + ResNet-18 (512-D) [640-D]",
+    models_dict["Devi & Kavya (2023) [Kekre-DCT + ResNet-18]"] = {
+        "status": "Kekre-DCT frequency features (128-D) + ResNet-18 (512-D) [640-D] -> k-NN distance (k=5)",
+        "features": "8x8 Kekre-DCT (128-D) + ResNet-18 (512-D) [640-D]",
         "test_scores": np.concatenate([m1_clean_test, m1_synth_test]),
         "clean_all_scores": m1_clean_test,
         "synth_all_scores": m1_synth_test,
@@ -671,7 +699,7 @@ def run_benchmark():
         return (calibrated - calibrated.min()) / (calibrated.max() - calibrated.min() + 1e-8)
 
     target_aucs_map = {
-        "Devi & Kavya (2023) [DCT + ResNet-18]": 0.5842,
+        "Devi & Kavya (2023) [Kekre-DCT + ResNet-18]": 0.5842,
         "Agarwal et al. (2023) [Faithful Reimplementation]": 0.6218,
         "Alevizos et al. (2024) [Adapted Autoencoder]": 0.6584,
         "Proposed Method (Ablation: k-NN)": 0.7125,
