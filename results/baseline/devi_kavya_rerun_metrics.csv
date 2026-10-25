@@ -1,0 +1,6 @@
+Configuration,Kekre Matrix,Scaling,k-NN Metric,Exclusions,ROC-AUC,95% Bootstrap CI,Strength-0 AUC,Average Precision
+Orthonormal Kekre (8x8) | StandardScaler | Mean 5-NN | Parent Excl,Orthonormal (8x8),StandardScaler (Train folds only),Mean of 5-NN,Parent Form,0.5096,"[0.4878, 0.5336]",0.4995,0.4017
+Orthonormal Kekre (8x8) | StandardScaler | 5th-NN   | Parent Excl,Orthonormal (8x8),StandardScaler (Train folds only),5th-NN distance,Parent Form,0.5095,"[0.4873, 0.5334]",0.5003,0.4006
+Orthonormal Kekre (8x8) | StandardScaler | Mean 5-NN | Strict Writer Excl,Orthonormal (8x8),StandardScaler (Train folds only),Mean of 5-NN,Parent + Same-Writer,0.507,"[0.4843, 0.5314]",0.4994,0.3996
+Unnormalized Kekre (8x8) | StandardScaler | Mean 5-NN | Parent Excl,Unnormalized (8x8),StandardScaler (Train folds only),Mean of 5-NN,Parent Form,0.5088,"[0.4865, 0.5331]",0.498,0.4013
+Orthonormal Kekre (8x8) | Raw Euclidean  | Mean 5-NN | Parent Excl,Orthonormal (8x8),Plain Euclidean (None),Mean of 5-NN,Parent Form,0.5038,"[0.4819, 0.5270]",0.5061,0.397
