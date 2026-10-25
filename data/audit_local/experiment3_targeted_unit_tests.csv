@@ -1,0 +1,5 @@
+anomaly_type,perturbed_lines_tested,pass_angle_pct,pass_density_pct,pass_width_pct,pass_any_pct (|z|>=2.0)
+thickening,28,3.57,0.0,3.57,7.14
+thinning,38,0.0,5.26,5.26,10.53
+blur,34,17.65,5.88,0.0,20.59
+dropout,23,13.04,0.0,0.0,13.04

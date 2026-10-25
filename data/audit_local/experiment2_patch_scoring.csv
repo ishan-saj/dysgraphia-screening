@@ -1,0 +1,4 @@
+method,auc,ci_low,ci_high,strength0_auc,rule4_detection
+Patch-Level Scoring (Max Patch),0.5394,0.4156,0.6523,0.48,NEGATIVE RESULT (CI Overlaps 0.5)
+Patch-Level Scoring (Mean Top 5%),0.5372,0.4117,0.6492,0.4112,NEGATIVE RESULT (S0 Fail)
+Page-Level Holistic Score (Hybrid LOF),0.5244,0.4078,0.6365,0.6032,NEGATIVE RESULT (S0 Fail)
